@@ -1,0 +1,7 @@
+.git
+.github
+data-root
+_to_delete
+*.tar.gz
+f95zone
+.env

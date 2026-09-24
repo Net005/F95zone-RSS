@@ -1,0 +1,17 @@
+# F95Zone RSS Enricher - drop into Dockhand / Portainer / `docker compose up -d`
+services:
+  f95zone-rss:
+    image: ghcr.io/net005/f95zone-rss:latest
+    # build: .                       # uncomment to build locally instead of pulling from GHCR
+    container_name: f95zone-rss
+    restart: unless-stopped
+    ports:
+      - "${PORT:-6069}:6069"
+    environment:
+      TZ: ${TZ:-Europe/Amsterdam}
+      # Optional: pre-create the admin account on first start. Leave empty to create it in the web UI.
+      ADMIN_USER: ${ADMIN_USER:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    volumes:
+      - ${DATA_DIR:-./data-root}:/data   # settings DB + feed + cache + images (data/), logs/
+    shm_size: 1gb                        # only matters for fetch_mode=browser

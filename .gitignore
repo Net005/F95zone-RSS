@@ -1,0 +1,6 @@
+f95zone
+*.log
+data-root/
+_to_delete/
+*.tar.gz
+.env

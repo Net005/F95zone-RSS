@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F95Zone RSS Control</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23e8474c'/%3E%3Ctext x='16' y='22' font-family='Arial' font-weight='900' font-size='15' text-anchor='middle' fill='white'%3EF95%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap topbar-in">
+    <a class="brand" href="#/dashboard"><span class="brand-f">F95</span><span class="brand-z">zone</span><span class="brand-sub">RSS Control</span></a>
+    <div class="topbar-right">
+      <span id="hdrPill" class="pill idle"><i></i><b>IDLE</b></span>
+      <span id="hdrClock" class="muted small"></span>
+      <span id="hdrUser" class="userchip"></span>
+      <button class="btn sm" id="btnLogout">Sign out</button>
+    </div>
+  </div>
+  <nav class="wrap tabs" id="tabs">
+    <a href="#/dashboard" data-v="dashboard">Dashboard</a>
+    <a href="#/log" data-v="log">Live Log</a>
+    <a href="#/releases" data-v="releases">Releases</a>
+    <a href="#/runs" data-v="runs">Run History</a>
+    <a href="#/feed" data-v="feed">Feed</a>
+    <a href="#/settings" data-v="settings">Settings</a>
+  </nav>
+</header>
+
+<main class="wrap" id="main">
+
+<!-- Dashboard -->
+<section id="v-dashboard" class="view">
+    <div class="grid g4" id="tiles"></div>
+
+  <div class="block">
+    <div class="block-h"><span>Pipeline</span><span class="muted small" id="pipeMeta"></span></div>
+    <div class="block-b">
+      <div class="progress"><div class="bar" id="bar"></div><span id="barTxt">Idle</span></div>
+      <div class="curitem" id="curItem">&nbsp;</div>
+      <div class="btnrow">
+        <button class="btn primary" id="btnRun">&#9654; Run now</button>
+        <button class="btn" id="btnForce" title="Ignore the cache TTL and re-scrape">Force refresh</button>
+        <button class="btn" id="btnFull" title="Re-scrape every thread, even unchanged ones">Full re-scrape</button>
+        <button class="btn danger" id="btnStop">&#9632; Stop</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="btnSched"></button>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid g2">
+    <div class="block">
+      <div class="block-h"><span>Live log</span><a href="#/log" class="small">open full log &rarr;</a></div>
+      <div class="miniLog" id="miniLog"></div>
+    </div>
+    <div class="block">
+      <div class="block-h"><span>Maintenance</span></div>
+      <div class="block-b">
+        <div class="kv" id="storageKv"></div>
+        <div class="btnrow wrap-btn">
+          <button class="btn" id="btnRebuild">Rebuild feed from cache</button>
+          <button class="btn" id="btnPurge">Purge orphaned images</button>
+          <button class="btn danger" id="btnClearCache">Clear release cache</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Live log -->
+<section id="v-log" class="view">
+  <div class="block">
+    <div class="block-h">
+      <span>Live log <span class="livedot" id="liveDot"></span></span>
+      <span class="muted small" id="logCount"></span>
+    </div>
+    <div class="toolbar">
+      <div class="seg" id="lvlSeg">
+        <button data-l="ALL" class="on">All</button><button data-l="INFO">Info</button><button data-l="WARN">Warn</button><button data-l="ERROR">Error</button>
+      </div>
+      <input id="logSearch" class="in grow" placeholder="Filter log lines...">
+      <label class="chk"><input type="checkbox" id="logFollow" checked> Follow</label>
+      <label class="chk"><input type="checkbox" id="logWrap" checked> Wrap</label>
+      <button class="btn sm" id="logPause">Pause</button>
+      <a class="btn sm" href="/api/logs/download">Download</a>
+      <button class="btn sm danger" id="logClear">Clear</button>
+    </div>
+    <div class="logbox" id="logBox"></div>
+  </div>
+</section>
+
+<!-- Releases -->
+<section id="v-releases" class="view">
+  <div class="toolbar sticky">
+    <input id="relSearch" class="in grow" placeholder="Search titles...">
+    <select id="relTag" class="in"><option value="">All tags</option></select>
+    <select id="relSort" class="in">
+      <option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="title">Title A-Z</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="relFailed"> Failed only</label>
+    <span class="muted small" id="relCount"></span>
+  </div>
+  <div class="tiles" id="relGrid"></div>
+</section>
+
+<!-- Run history -->
+<section id="v-runs" class="view">
+  <div class="block">
+    <div class="block-h"><span>Run history</span><span class="muted small">last 100 runs</span></div>
+    <div class="tablewrap"><table class="tbl" id="runsTbl"></table></div>
+  </div>
+</section>
+
+<!-- Feed -->
+<section id="v-feed" class="view">
+  <div class="grid g2">
+    <div class="block">
+      <div class="block-h"><span>Feed endpoint</span></div>
+      <div class="block-b">
+        <label class="lbl">Public feed URL</label>
+        <div class="copyrow"><input class="in grow" id="feedUrl" readonly><button class="btn" id="copyFeed">Copy</button></div>
+        <label class="lbl">Local feed URL</label>
+        <div class="copyrow"><input class="in grow" id="feedLocal" readonly><button class="btn" id="copyLocal">Copy</button></div>
+        <div class="kv" id="feedKv" style="margin-top:14px"></div>
+        <div class="btnrow">
+          <a class="btn primary" href="/feed.xml" target="_blank" rel="noopener">Open feed.xml</a>
+          <a class="btn" href="/feed.xml" download="feed.xml">Download</a>
+          <button class="btn" id="btnRebuild2">Rebuild from cache</button>
+        </div>
+      </div>
+    </div>
+    <div class="block">
+      <div class="block-h"><span>Endpoints</span></div>
+      <div class="block-b">
+        <table class="tbl compact">
+          <tr><td><code>/feed.xml</code></td><td>Enriched RSS feed (public)</td></tr>
+          <tr><td><code>/f95zone/images/&lt;file&gt;</code></td><td>Cached images (public)</td></tr>
+          <tr><td><code>/health</code></td><td>Plain-text status (public)</td></tr>
+          <tr><td><code>/</code></td><td>This control panel</td></tr>
+        </table>
+        <p class="muted small" style="margin-top:12px">Tip: only expose <code>/feed.xml</code>, <code>/f95zone/images/*</code> and <code>/health</code> through your reverse proxy; keep the panel on your LAN.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Settings -->
+<section id="v-settings" class="view">
+  <form id="cfgForm" class="block" autocomplete="off">
+    <div class="block-h"><span>Settings</span><span class="muted small">stored in the database</span></div>
+    <div class="block-b form">
+      <fieldset><legend>Source</legend>
+        <label class="lbl">Source RSS URL<input class="in" name="rss_source"></label>
+        <label class="lbl">Public base URL <small>(used in feed links)</small><input class="in" name="public_base_url"></label>
+      </fieldset>
+      <fieldset><legend>Schedule &amp; cache</legend>
+        <div class="grid g3">
+          <label class="lbl">Run every N hours<input class="in" type="number" min="1" max="24" name="schedule_hours"></label>
+          <label class="lbl">Cache TTL (hours)<input class="in" type="number" step="0.25" min="0" name="cache_ttl_hours"></label>
+          <label class="lbl">Rate limit (ms)<input class="in" type="number" min="0" name="rate_limit_ms"></label>
+        </div>
+        <label class="chk"><input type="checkbox" name="scheduler_enabled"> Scheduler enabled</label>
+        <label class="chk"><input type="checkbox" name="run_on_start"> Run once at startup</label>
+        <label class="chk"><input type="checkbox" name="reuse_unchanged"> Reuse enrichment for unchanged threads (much faster, gentler on the site)</label>
+      </fieldset>
+      <fieldset><legend>Scraping</legend>
+        <div class="grid g3">
+          <label class="lbl">Fetch mode
+            <select class="in" name="fetch_mode"><option value="http">http (fast, no browser)</option><option value="browser">browser (headless Chromium)</option></select></label>
+          <label class="lbl">Max images per release<input class="in" type="number" min="0" max="50" name="max_images_per_release"></label>
+          <label class="lbl">Chromium path <small>(optional)</small><input class="in" name="chrome_path" placeholder="auto-detect"></label>
+        </div>
+        <label class="lbl">User-Agent<input class="in" name="user_agent"></label>
+      </fieldset>
+      <div class="btnrow"><button class="btn primary" type="submit">Save settings</button><button class="btn" type="button" id="cfgReset">Reset form</button><span id="cfgMsg" class="small"></span></div>
+    </div>
+  </form>
+
+  <form id="pwForm" class="block" autocomplete="off">
+    <div class="block-h"><span>Account</span><span class="muted small" id="acctUser"></span></div>
+    <div class="block-b form">
+      <div class="grid g3">
+        <label class="lbl">Current password<input class="in" type="password" name="current" autocomplete="current-password" required></label>
+        <label class="lbl">New password <small>(min 8)</small><input class="in" type="password" name="new" autocomplete="new-password" minlength="8" required></label>
+        <label class="lbl">Confirm new password<input class="in" type="password" name="confirm" autocomplete="new-password" required></label>
+      </div>
+      <div class="btnrow"><button class="btn primary" type="submit">Change password</button><span id="pwMsg" class="small"></span></div>
+      <p class="muted small">Changing the password signs out all other browsers.</p>
+    </div>
+  </form>
+</section>
+</main>
+
+<!-- release modal -->
+<div class="modal" id="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-h"><span id="mTitle"></span><button class="x" id="mClose">&times;</button></div>
+    <div class="modal-b" id="mBody"></div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+<script src="/ui/app.js"></script>
+</body>
+</html>
