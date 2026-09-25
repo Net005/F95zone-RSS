@@ -688,8 +688,11 @@ func (a *App) StartBackfill(pages int) error {
 	if pages < 1 {
 		pages = 1
 	}
-	if pages > 200 {
-		pages = 200
+	// F95zone's listing currently sits around ~900 pages total; fetchListingDataPage
+	// stops on its own once it passes the site's real page count, so this ceiling is
+	// just a sanity cap against a mistyped value, not the effective limit in practice.
+	if pages > 2000 {
+		pages = 2000
 	}
 	ctx, err := a.begin("backfill")
 	if err != nil {
@@ -763,8 +766,15 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 		} else {
 			consecutiveEmpty = 0
 		}
-		if consecutiveEmpty >= 3 {
-			a.log.Info("Backfill: 3 pages in a row with nothing new, stopping early")
+		// The listing is ordered by most-recently-updated, so a scheduled/incremental
+		// run legitimately hits "nothing new" within the first few pages. A deep
+		// backfill, though, expects to plow through long already-known stretches
+		// before reaching untouched history further back - stopping after only 3
+		// empty pages (as this used to) cut runs short at page 4 of 900+. Require a
+		// much longer empty streak before giving up early.
+		const consecutiveEmptyLimit = 40
+		if consecutiveEmpty >= consecutiveEmptyLimit {
+			a.log.Info("Backfill: %d pages in a row with nothing new, stopping early", consecutiveEmptyLimit)
 			break
 		}
 		if totalPages > 0 && page >= totalPages {
