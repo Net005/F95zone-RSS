@@ -9,7 +9,7 @@ html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
 a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
 code{background:#000;border:1px solid var(--line);padding:1px 5px;border-radius:3px;font-size:12px;color:#f0a0a3}
-.wrap{max-width:1360px;margin:0 auto;padding:0 18px}
+.wrap{max-width:1800px;margin:0 auto;padding:0 18px}
 .muted{color:var(--muted)} .small{font-size:12px}
 
 /* header */
@@ -130,11 +130,11 @@ legend{padding:0 8px;color:var(--accent);font-weight:700;font-size:12px;text-tra
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:3vh 14px;overflow:auto}
 .modal[hidden]{display:none}
 .modal-box{background:var(--panel);border:1px solid var(--line2);border-top:3px solid var(--accent);border-radius:var(--radius);width:min(920px,100%);max-height:94vh;display:flex;flex-direction:column;overflow:hidden}
-.modal-box.wide{width:min(1240px,96vw)}
+.modal-box.wide{width:min(1560px,96vw)}
 .modal-h{display:flex;justify-content:space-between;gap:12px;padding:10px 16px;background:var(--panel2);font-weight:700;font-size:15px;color:#fff;flex:none}
 .x{background:none;border:0;color:#aaa;font-size:26px;line-height:1;cursor:pointer}.x:hover{color:#fff}
 .modal-b{padding:14px;overflow:auto}
-.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin:10px 0;max-height:260px;overflow:auto;padding-right:2px}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:10px 0;max-height:220px;overflow:auto;padding-right:2px}
 .shots img{width:100%;height:110px;object-fit:cover;border-radius:3px;border:1px solid var(--line);cursor:zoom-in;background:#000}
 iframe.pv{width:100%;border:0;background:transparent;display:block}
 h4{margin:12px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent)}
@@ -142,17 +142,18 @@ h4:first-child{margin-top:0}
 
 /* release overview (modal detail) - a slim strip, not a hero: the detail view
    fits one screen where reasonable, so the banner shouldn't dominate it. */
-.rel-hero{position:relative;width:100%;height:140px;background:#0c0c0c center/cover no-repeat;border-radius:var(--radius);overflow:hidden;margin-bottom:10px}
+.rel-hero{position:relative;width:100%;height:180px;background:#0c0c0c center/cover no-repeat;border-radius:var(--radius);overflow:hidden;margin-bottom:10px}
 .rel-hero::after{content:"";position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.8),rgba(0,0,0,0) 65%)}
 .rel-hero .rh-in{position:absolute;left:0;right:0;bottom:0;padding:8px 14px}
 .rel-hero .rh-title{font-size:16px;font-weight:800;color:#fff;line-height:1.25}
 .rel-hero .rh-sub{margin-top:3px;color:#ddd;font-size:12px}
-.rel-layout{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+.rel-layout{display:grid;grid-template-columns:3fr 2fr;gap:16px}
 @media(max-width:760px){.rel-layout{grid-template-columns:1fr}}
 .rel-info{display:grid;grid-template-columns:1fr 1fr;gap:5px 16px;font-size:13px}
 .rel-info dt{color:var(--muted);grid-column:1}.rel-info dd{margin:0;color:#fff;grid-column:2;text-align:right}
+.rel-tags{display:flex;flex-wrap:wrap;gap:5px;max-height:90px;overflow:auto}
 @media(max-width:520px){.rel-info{grid-template-columns:1fr}.rel-info dd{text-align:left}}
-.rel-desc{background:#181818;border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;font-size:13px;line-height:1.55;color:#ddd;max-height:180px;overflow:auto}
+.rel-desc{background:#181818;border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;font-size:13px;line-height:1.55;color:#ddd;max-height:260px;overflow:auto}
 .rel-desc p{margin:0}
 .rel-desc iframe.pv{background:transparent}
 .watch-btn{display:inline-flex;align-items:center;gap:6px;background:#2a2a2a;border:1px solid var(--line2);color:#ddd;padding:6px 12px;border-radius:var(--radius);font:600 12px inherit;cursor:pointer}

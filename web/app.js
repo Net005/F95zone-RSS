@@ -440,14 +440,14 @@ function detailHTML(r, d) {
       <div>
         <h4>Overview</h4>
         <div class="rel-desc">${overviewHTML(r)}</div>
-        ${d.images.length ? `<h4>Screenshots</h4><div class="shots">${d.images.map(u => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}">`).join('')}</div>` : ''}
       </div>
       <div>
         <h4>Info</h4>
         <dl class="rel-info">${info.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-        ${r.tags && r.tags.length ? `<h4>Tags</h4><div>${r.tags.map(tagChipHTML).join('')}</div>` : ''}
+        ${r.tags && r.tags.length ? `<h4>Tags</h4><div class="rel-tags">${r.tags.map(tagChipHTML).join('')}</div>` : ''}
       </div>
-    </div>`;
+    </div>
+    ${d.images.length ? `<h4>Screenshots</h4><div class="shots">${d.images.map(u => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}">`).join('')}</div>` : ''}`;
 }
 
 let currentRelLink = null;
