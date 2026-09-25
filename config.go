@@ -44,7 +44,7 @@ func normalizeSiteCookie(raw string) string {
 }
 
 const (
-	appVersion       = "6.5.1"
+	appVersion       = "6.5.2"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
@@ -64,22 +64,25 @@ const (
 	// this bump forces one more re-scrape pass to pick up Genre/tags/Overview now that login works.
 	// v5 (6.5.1): Overview now keeps its paragraph breaks (stripHTMLParagraphs) instead of being
 	// flattened into one run-on line - bumped so existing rows get reformatted, not just new ones.
-	parserVersion = 5
+	// v6 (6.5.2): Changelog and Downloads/Links are now extracted as their own fields.
+	parserVersion = 6
 )
 
 // Config mirrors the original settings.json keys and adds a few new ones.
 // Missing keys keep their defaults, so old settings files keep working.
 type Config struct {
-	ScheduleHours    int     `json:"schedule_hours"`
-	// RSSSource is kept only so older settings.json/database values still decode, and as the
-	// probe URL format reference; scheduled/manual runs no longer fetch it (see ScheduledPages -
-	// F95zone's source RSS is capped at ~90 rows and doesn't reflect the real listing order, so
-	// every run now walks the same paged listing backfill uses instead).
-	RSSSource        string  `json:"rss_source"`
-	// ScheduledPages: how many pages of the listing (same paging as Dashboard's manual backfill,
-	// BackfillURLTemplate) a normal scheduled/manual run walks to discover both new and
-	// already-known threads (existing threads are re-checked for a version bump, not skipped).
-	ScheduledPages   int     `json:"scheduled_pages"`
+	ScheduleHours int `json:"schedule_hours"`
+	// RSSSource is kept only so older settings.json/database values still decode; scheduled/manual
+	// runs no longer fetch it (see ScheduledPages) - F95zone's source RSS is capped at ~90 rows and
+	// doesn't reflect the real listing order, so every run walks the paged listing API instead.
+	RSSSource string `json:"rss_source"`
+	// BackfillURLTemplate is likewise kept only for old settings.json/database compatibility -
+	// backfill and scheduled runs both discover threads via F95zone's own listDataURLTemplate JSON
+	// API now (plain HTTP, no login or headless browser needed for discovery), not this template.
+	// ScheduledPages: how many pages of F95zone's own listing API (same one Dashboard's manual
+	// backfill uses) a normal scheduled/manual run walks to discover both new and already-known
+	// threads (existing threads are re-checked for a version bump, not skipped).
+	ScheduledPages int `json:"scheduled_pages"`
 	// LoginCheckHours: how often a background check re-probes CheckF95Login independently of
 	// the scrape schedule, so a cookie that quietly expired is caught (and Pushover-alerted)
 	// even during a stretch with nothing new to enrich. 0 disables the periodic check.
@@ -129,22 +132,22 @@ type Config struct {
 
 func defaultConfig() Config {
 	return Config{
-		ScheduleHours:         12,
-		RSSSource:             defaultRSSSource,
-		ScheduledPages:        3,
-		LoginCheckHours:       6,
-		MaxImages:             8,
-		RateLimitMS:           800,
-		CacheTTLHours:         2,
-		PublicBaseURL:         "https://f95-rss.bondt.network",
-		FetchMode:             "http",
-		UserAgent:             defaultUA,
-		RunOnStart:            true,
-		SchedulerEnabled:      true,
-		ReuseUnchanged:        true,
-		BackfillURLTemplate:   defaultBackfillTemplate,
-		NotifyNew:             true,
-		NotifyUpdate:          true,
+		ScheduleHours:              12,
+		RSSSource:                  defaultRSSSource,
+		ScheduledPages:             3,
+		LoginCheckHours:            6,
+		MaxImages:                  8,
+		RateLimitMS:                800,
+		CacheTTLHours:              2,
+		PublicBaseURL:              "https://f95-rss.bondt.network",
+		FetchMode:                  "http",
+		UserAgent:                  defaultUA,
+		RunOnStart:                 true,
+		SchedulerEnabled:           true,
+		ReuseUnchanged:             true,
+		BackfillURLTemplate:        defaultBackfillTemplate,
+		NotifyNew:                  true,
+		NotifyUpdate:               true,
 		HoverSlideshowEnabled:      true,
 		HoverSlideshowDelayMS:      900,
 		HoverSlideshowStartDelayMS: 400,

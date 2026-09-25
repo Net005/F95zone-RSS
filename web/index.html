@@ -201,7 +201,7 @@
     <div class="block-b form">
       <fieldset><legend>Source</legend>
         <label class="lbl">Public base URL <small>(used in feed links)</small><input class="in" name="public_base_url"></label>
-        <label class="lbl">Backfill listing URL template <small>(%d is the page number)</small><input class="in" name="backfill_url_template"></label>
+        <label class="lbl">Backfill listing URL template <small>(unused - kept only for old settings; discovery now uses F95zone's own listing API directly)</small><input class="in" name="backfill_url_template" disabled></label>
         <label class="lbl">Source RSS URL <small>(unused - kept only for old settings)</small><input class="in" name="rss_source" disabled></label>
       </fieldset>
       <fieldset><legend>Schedule &amp; cache</legend>
@@ -280,6 +280,13 @@
 <div class="lightbox" id="lightbox" hidden>
   <button class="lbx" id="lbClose">&times;</button>
   <img id="lightboxImg" src="" alt="">
+</div>
+<!-- full changelog (nested above the release modal, like the lightbox) -->
+<div class="modal" id="changelogModal" hidden>
+  <div class="modal-box" id="changelogBox">
+    <div class="modal-h"><span id="clTitle">Changelog</span><button class="x" id="clClose">&times;</button></div>
+    <div class="modal-b" id="clBody"></div>
+  </div>
 </div>
 <div class="toasts" id="toasts"></div>
 <script src="/ui/app.js"></script>

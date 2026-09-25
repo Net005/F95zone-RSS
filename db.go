@@ -44,6 +44,8 @@ func OpenDB(path string) (*DB, error) {
 			os TEXT NOT NULL DEFAULT '',
 			language TEXT NOT NULL DEFAULT '',
 			store TEXT NOT NULL DEFAULT '',
+			changelog TEXT NOT NULL DEFAULT '',
+			downloads_json TEXT NOT NULL DEFAULT '[]',
 			enriched_at TEXT NOT NULL DEFAULT '',
 			enrich_error TEXT NOT NULL DEFAULT '',
 			parser_ver INTEGER NOT NULL DEFAULT 0,
@@ -84,6 +86,9 @@ func OpenDB(path string) (*DB, error) {
 	if err := db.migrateOverviewColumn(); err != nil {
 		return nil, err
 	}
+	if err := db.migrateChangelogDownloadsColumns(); err != nil {
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -110,6 +115,39 @@ func (d *DB) migrateOverviewColumn() error {
 	rows.Close()
 	if !has {
 		if _, err := d.sql.Exec(`ALTER TABLE releases ADD COLUMN overview TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateChangelogDownloadsColumns adds releases.changelog/downloads_json to
+// databases created before those fields existed. Same pattern as
+// migrateOverviewColumn.
+func (d *DB) migrateChangelogDownloadsColumns() error {
+	rows, err := d.sql.Query(`PRAGMA table_info(releases)`)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	rows.Close()
+	if !have["changelog"] {
+		if _, err := d.sql.Exec(`ALTER TABLE releases ADD COLUMN changelog TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if !have["downloads_json"] {
+		if _, err := d.sql.Exec(`ALTER TABLE releases ADD COLUMN downloads_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
 			return err
 		}
 	}

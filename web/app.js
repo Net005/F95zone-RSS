@@ -454,10 +454,24 @@ function detailHTML(r, d) {
         <h4>Info</h4>
         <dl class="rel-info">${info.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
         ${r.tags && r.tags.length ? `<h4>Tags</h4><div class="rel-tags">${r.tags.map(tagChipHTML).join('')}</div>` : ''}
+        ${r.downloads && r.downloads.length ? `<h4>Downloads</h4><div class="rel-downloads">${r.downloads.map(dl => `<a class="dl-link" href="${esc(dl.url)}" target="_blank" rel="noopener noreferrer">${esc(dl.host)}</a>`).join('')}</div>` : ''}
+        ${r.changelog ? `<h4>Changelog</h4><div class="rel-changelog-compact">${esc(r.changelog.split(/\n{2,}/)[0])}</div><button type="button" class="btn sm" id="mChangelogBtn">Full changelog</button>` : ''}
       </div>
     </div>
-    ${d.images.length ? `<h4>Screenshots</h4><div class="shots">${d.images.map(u => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}">`).join('')}</div>` : ''}`;
+    ${d.images.length ? `<h4>Screenshots</h4><div class="shots">${d.images.map((u, i) => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}" data-idx="${i}">`).join('')}</div>` : ''}`;
 }
+
+function changelogModalHTML(text) {
+  return text.split(/\n{2,}/).map(p => `<p>${esc(p)}</p>`).join('');
+}
+function openChangelogModal(title, text) {
+  $('#clTitle').textContent = 'Changelog — ' + title;
+  $('#clBody').innerHTML = changelogModalHTML(text);
+  $('#changelogModal').hidden = false;
+}
+const closeChangelogModal = () => { $('#changelogModal').hidden = true; $('#clBody').innerHTML = ''; };
+$('#clClose').onclick = closeChangelogModal;
+$('#changelogModal').onclick = e => { if (e.target.id === 'changelogModal') closeChangelogModal(); };
 
 let currentRelLink = null;
 
@@ -494,6 +508,8 @@ async function openRelease(link) {
   $('#mBody').innerHTML = detailHTML(r, d);
   $('#mReenrich').onclick = async () => { const ok = await act(() => api('/api/reenrich', { method: 'POST', body: { link } }), 'Re-scrape started'); if (ok) closeModal(); };
   $('#mWatch').onclick = () => toggleWatchModal(link, !r.watched);
+  if (r.changelog) $('#mChangelogBtn').onclick = () => openChangelogModal(r.title, r.changelog);
+  currentShots = d.images || [];
   $('#modal').hidden = false;
 }
 function toggleWatchModal(link, on) {
@@ -505,26 +521,43 @@ function toggleWatchModal(link, on) {
     const grid = $(`[data-watch="${CSS.escape(link)}"]`); if (grid) { grid.classList.toggle('on', on); grid.textContent = on ? '★' : '☆'; }
   });
 }
-const closeModal = () => { $('#modal').hidden = true; $('#mBody').innerHTML = ''; $('#modalBox').classList.remove('wide'); currentRelLink = null; };
+const closeModal = () => { $('#modal').hidden = true; $('#mBody').innerHTML = ''; $('#modalBox').classList.remove('wide'); currentRelLink = null; currentShots = []; };
 $('#mClose').onclick = closeModal;
 $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
 
 // screenshot lightbox (nested above the release modal)
+let currentShots = []; // the open release's screenshot URLs, for j/k in the lightbox
+let lightboxIdx = -1;
+function showLightbox(idx) {
+  if (idx < 0 || idx >= currentShots.length) return;
+  lightboxIdx = idx;
+  $('#lightboxImg').src = currentShots[idx];
+  $('#lightbox').hidden = false;
+}
+function closeLightbox() { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; lightboxIdx = -1; }
 $('#mBody').addEventListener('click', e => {
   const img = e.target.closest('.shots img'); if (!img) return;
-  $('#lightboxImg').src = img.dataset.full; $('#lightbox').hidden = false;
+  const idx = Number(img.dataset.idx);
+  showLightbox(Number.isFinite(idx) && currentShots.length ? idx : 0);
 });
-$('#lbClose').onclick = () => { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; };
-$('#lightbox').onclick = e => { if (e.target.id === 'lightbox') { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; } };
+$('#lbClose').onclick = closeLightbox;
+$('#lightbox').onclick = e => { if (e.target.id === 'lightbox') closeLightbox(); };
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
-    if (!$('#lightbox').hidden) { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; return; }
+    if (!$('#lightbox').hidden) { closeLightbox(); return; }
+    if (!$('#changelogModal').hidden) { closeChangelogModal(); return; }
     if (!$('#modal').hidden) closeModal();
     return;
   }
-  if ($('#modal').hidden || !$('#lightbox').hidden) return;
   const tag = (e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+  if (!$('#lightbox').hidden) {
+    // screenshot-to-screenshot browsing: clamped, not looping, unlike release j/k
+    if (e.key === 'j' || e.key === 'J') { e.preventDefault(); showLightbox(lightboxIdx + 1); }
+    else if (e.key === 'k' || e.key === 'K') { e.preventDefault(); showLightbox(lightboxIdx - 1); }
+    return;
+  }
+  if ($('#modal').hidden || !$('#changelogModal').hidden) return;
   if (e.key === 'j' || e.key === 'J') { e.preventDefault(); navigateRelease(1); }
   else if (e.key === 'k' || e.key === 'K') { e.preventDefault(); navigateRelease(-1); }
 });

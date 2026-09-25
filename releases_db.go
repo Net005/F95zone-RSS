@@ -13,33 +13,35 @@ import (
 // Tags are the thread's own Genre values. Engine and Version are parsed out
 // separately because they're filtered/displayed on their own.
 type Release struct {
-	Link              string   `json:"link"`
-	Title             string   `json:"title"`
-	PubDateRaw        string   `json:"pub_date_raw"`
-	PubDateISO        string   `json:"pub_date_iso"`
-	SourceDescription string   `json:"source_description"`
-	ExtraDescription  string   `json:"extra_description"`
-	Overview          string   `json:"overview,omitempty"`
-	Labels            []string `json:"labels"`
-	Tags              []string `json:"tags"`
-	Engine            string   `json:"engine"`
-	Version           string   `json:"version"`
-	ImageURLs         []string `json:"image_urls"`
-	HeaderImage       string   `json:"header_image"`
-	ThreadUpdated     string   `json:"thread_updated,omitempty"`
-	ReleaseDate       string   `json:"release_date,omitempty"`
-	Developer         string   `json:"developer,omitempty"`
-	Censored          string   `json:"censored,omitempty"`
-	OS                string   `json:"os,omitempty"`
-	Language          string   `json:"language,omitempty"`
-	Store             string   `json:"store,omitempty"`
-	EnrichedAt        string   `json:"enriched_at,omitempty"`
-	EnrichError       string   `json:"enrich_error,omitempty"`
-	ParserVer         int      `json:"-"`
-	FirstSeen         string   `json:"first_seen,omitempty"`
-	LastSeen          string   `json:"last_seen,omitempty"`
-	DiscoveredVia     string   `json:"discovered_via,omitempty"`
-	Watched           bool     `json:"watched"`
+	Link              string         `json:"link"`
+	Title             string         `json:"title"`
+	PubDateRaw        string         `json:"pub_date_raw"`
+	PubDateISO        string         `json:"pub_date_iso"`
+	SourceDescription string         `json:"source_description"`
+	ExtraDescription  string         `json:"extra_description"`
+	Overview          string         `json:"overview,omitempty"`
+	Labels            []string       `json:"labels"`
+	Tags              []string       `json:"tags"`
+	Engine            string         `json:"engine"`
+	Version           string         `json:"version"`
+	ImageURLs         []string       `json:"image_urls"`
+	HeaderImage       string         `json:"header_image"`
+	ThreadUpdated     string         `json:"thread_updated,omitempty"`
+	ReleaseDate       string         `json:"release_date,omitempty"`
+	Developer         string         `json:"developer,omitempty"`
+	Censored          string         `json:"censored,omitempty"`
+	OS                string         `json:"os,omitempty"`
+	Language          string         `json:"language,omitempty"`
+	Store             string         `json:"store,omitempty"`
+	Changelog         string         `json:"changelog,omitempty"`
+	Downloads         []DownloadLink `json:"downloads,omitempty"`
+	EnrichedAt        string         `json:"enriched_at,omitempty"`
+	EnrichError       string         `json:"enrich_error,omitempty"`
+	ParserVer         int            `json:"-"`
+	FirstSeen         string         `json:"first_seen,omitempty"`
+	LastSeen          string         `json:"last_seen,omitempty"`
+	DiscoveredVia     string         `json:"discovered_via,omitempty"`
+	Watched           bool           `json:"watched"`
 }
 
 func boolToInt(b bool) int {
@@ -47,6 +49,23 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// DownloadLink is one entry from a thread's "Downloads"/"Links" field - the
+// link text (usually a host name like "MEGA", "PIXELDRAIN", "Gofile") plus
+// the URL. Unlike the other metadata fields, this one needs the href, so it
+// can't go through the plain-text field extraction the rest of them use.
+type DownloadLink struct {
+	Host string `json:"host"`
+	URL  string `json:"url"`
+}
+
+func jsonDownloads(v []DownloadLink) string {
+	if v == nil {
+		v = []DownloadLink{}
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 func jsonArr(v []string) string {
@@ -72,9 +91,10 @@ func scanRelease(row interface {
 	var r Release
 	var labels, imgs string
 	var watched int
+	var downloads string
 	err := row.Scan(&r.Link, &r.Title, &r.PubDateRaw, &r.PubDateISO, &r.SourceDescription, &r.ExtraDescription,
 		&r.Overview, &labels, &r.Engine, &r.Version, &imgs, &r.HeaderImage, &r.ThreadUpdated, &r.ReleaseDate, &r.Developer,
-		&r.Censored, &r.OS, &r.Language, &r.Store, &r.EnrichedAt, &r.EnrichError, &r.ParserVer,
+		&r.Censored, &r.OS, &r.Language, &r.Store, &r.Changelog, &downloads, &r.EnrichedAt, &r.EnrichError, &r.ParserVer,
 		&r.FirstSeen, &r.LastSeen, &r.DiscoveredVia, &watched)
 	if err != nil {
 		return r, err
@@ -82,13 +102,14 @@ func scanRelease(row interface {
 	// Tags come from the release_tags join table, filled in by the caller.
 	r.Labels = parseArr(labels)
 	r.ImageURLs = parseArr(imgs)
+	json.Unmarshal([]byte(downloads), &r.Downloads)
 	r.Watched = watched == 1
 	return r, nil
 }
 
 const releaseCols = `link, title, pub_date_raw, pub_date_iso, source_description, extra_description, overview,
 	labels_json, engine, version, image_urls_json, header_image, thread_updated, release_date, developer,
-	censored, os, language, store, enriched_at, enrich_error, parser_ver, first_seen, last_seen, discovered_via, watched`
+	censored, os, language, store, changelog, downloads_json, enriched_at, enrich_error, parser_ver, first_seen, last_seen, discovered_via, watched`
 
 func (d *DB) tagsFor(link string) []string {
 	rows, err := d.sql.Query(`SELECT tag FROM release_tags WHERE link=? ORDER BY tag`, link)
@@ -138,7 +159,7 @@ func (d *DB) UpsertRelease(r Release, discoveredVia string) error {
 	// watched is intentionally left out of the UPDATE SET clause below: a
 	// human's "monitor this release" toggle must survive every re-scrape.
 	// The bound value here only ever applies to a genuinely new row.
-	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(link) DO UPDATE SET
 			title=excluded.title, pub_date_raw=excluded.pub_date_raw, pub_date_iso=excluded.pub_date_iso,
 			source_description=excluded.source_description, extra_description=excluded.extra_description,
@@ -147,11 +168,12 @@ func (d *DB) UpsertRelease(r Release, discoveredVia string) error {
 			image_urls_json=excluded.image_urls_json, header_image=excluded.header_image,
 			thread_updated=excluded.thread_updated, release_date=excluded.release_date, developer=excluded.developer,
 			censored=excluded.censored, os=excluded.os, language=excluded.language, store=excluded.store,
+			changelog=excluded.changelog, downloads_json=excluded.downloads_json,
 			enriched_at=excluded.enriched_at, enrich_error=excluded.enrich_error, parser_ver=excluded.parser_ver,
 			last_seen=excluded.last_seen`,
 		r.Link, r.Title, r.PubDateRaw, r.PubDateISO, r.SourceDescription, r.ExtraDescription, r.Overview,
 		jsonArr(r.Labels), r.Engine, r.Version, jsonArr(r.ImageURLs), r.HeaderImage, r.ThreadUpdated, r.ReleaseDate,
-		r.Developer, r.Censored, r.OS, r.Language, r.Store, r.EnrichedAt, r.EnrichError, r.ParserVer,
+		r.Developer, r.Censored, r.OS, r.Language, r.Store, r.Changelog, jsonDownloads(r.Downloads), r.EnrichedAt, r.EnrichError, r.ParserVer,
 		firstSeen, now, discoveredVia, boolToInt(r.Watched))
 	if err != nil {
 		return err

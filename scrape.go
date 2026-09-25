@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -409,6 +410,69 @@ func parseHeaderTags(doc *goquery.Document) []string {
 // fallback slice of the post when no explicit Overview label exists). The
 // value runs until the next "<b>Label</b>" metadata heading or a double <br>,
 // whichever comes first.
+// changelogFieldRe/downloadsFieldRe find the "<b>Changelog</b>:"/"<b>Downloads</b>:"
+// (or "Links") heading. Kept separate from fieldBoundaryRe because Downloads
+// needs the raw HTML (to pull href attributes out), not the plain-text value
+// every other field extraction collapses down to.
+var (
+	changelogFieldRe = regexp.MustCompile(`(?i)<b[^>]*>\s*Changelog\s*</b>\s*:?\s*`)
+	downloadsFieldRe = regexp.MustCompile(`(?i)<b[^>]*>\s*(?:Download|Downloads|Links?)\s*</b>\s*:?\s*`)
+	anchorRe         = regexp.MustCompile(`(?is)<a\b[^>]*\bhref="([^"]+)"[^>]*>(.*?)</a>`)
+)
+
+// extractChangelog pulls the "Changelog:" section as its own field, same
+// boundary logic as Overview but without stopping at the first double-<br> -
+// a changelog is usually itself a list of version entries separated by
+// double-<br>/<li>, all of which belong in the one field.
+func extractChangelog(inner string) string {
+	m := changelogFieldRe.FindStringIndex(inner)
+	if m == nil {
+		return ""
+	}
+	rest := inner[m[1]:]
+	end := len(rest)
+	if n := nextSecRe.FindStringIndex(rest); n != nil {
+		end = n[0]
+	}
+	txt := stripGated(stripHTMLParagraphs(rest[:end]))
+	if len([]rune(txt)) < 3 {
+		return ""
+	}
+	return txt
+}
+
+// extractDownloadLinks pulls every <a href="..."> out of the "Downloads:"/
+// "Links:" section. Only http(s) links are kept (the odd relative/anchor
+// link that slips into that section, e.g. a "how to install" jump link, is
+// not a download).
+func extractDownloadLinks(inner string) []DownloadLink {
+	m := downloadsFieldRe.FindStringIndex(inner)
+	if m == nil {
+		return nil
+	}
+	rest := inner[m[1]:]
+	end := len(rest)
+	if n := nextSecRe.FindStringIndex(rest); n != nil {
+		end = n[0]
+	}
+	seg := rest[:end]
+	seen := map[string]bool{}
+	var out []DownloadLink
+	for _, mm := range anchorRe.FindAllStringSubmatch(seg, -1) {
+		href := strings.TrimSpace(html.UnescapeString(mm[1]))
+		if !strings.HasPrefix(href, "http") || seen[href] {
+			continue
+		}
+		seen[href] = true
+		text := stripGated(stripHTML(mm[2]))
+		if text == "" {
+			text = href
+		}
+		out = append(out, DownloadLink{Host: text, URL: href})
+	}
+	return out
+}
+
 func extractOverview(inner string) string {
 	m := overviewRe.FindStringIndex(inner)
 	if m == nil {
@@ -687,6 +751,8 @@ func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Conf
 	}
 	r.ExtraDescription = desc
 	r.Overview = extractOverview(inner)
+	r.Changelog = extractChangelog(inner)
+	r.Downloads = extractDownloadLinks(inner)
 	a.log.Info("  Description extracted (%d chars)", len([]rune(desc)))
 
 	// Engine/label from the thread's own prefix badges (authoritative) fall back
@@ -807,70 +873,75 @@ func (a *App) downloadImage(ctx context.Context, cfg Config, u, thread string) (
 //  Backfill: harvest thread links from the Angular "latest alpha" listing
 // ──────────────────────────────────────────────────────────────
 
-var threadHrefRe = regexp.MustCompile(`/threads/[^/?#]+\.\d+/?$`)
+// listDataURLTemplate is F95zone's own paginated JSON API behind the
+// "Latest Updates" Angular app - the exact endpoint latest.min.js itself
+// calls to render the page, discovered by inspecting what the Angular shell
+// actually fetches. Unlike the Angular route "/sam/latest_alpha/#/..." this
+// is a plain JSON GET, needs no headless browser, and - confirmed live -
+// needs no login either, unlike the Angular shell page (which gates on
+// login/permissions for reasons unrelated to the underlying data). "%d" is
+// the page number; 30 items per page.
+const listDataURLTemplate = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=list&cat=games&page=%d"
 
-const harvestJS = `(() => {
-  const out = []; const seen = new Set();
-  document.querySelectorAll('a[href*="/threads/"]').forEach(a => {
-    let href = a.getAttribute('href') || '';
-    if (!href) return;
-    if (href.startsWith('//')) href = location.protocol + href;
-    else if (href.startsWith('/')) href = location.origin + href;
-    href = href.split('#')[0].split('?')[0];
-    const title = (a.textContent || '').trim();
-    if (!title || seen.has(href)) return;
-    seen.add(href);
-    out.push({link: href, title: title});
-  });
-  return out;
-})()`
-
-type harvestedLink struct {
-	Link  string `json:"link"`
-	Title string `json:"title"`
+type listDataItem struct {
+	ThreadID int    `json:"thread_id"`
+	Title    string `json:"title"`
 }
 
-// harvestListingPage loads one page of the client-rendered "latest alpha"
-// listing and pulls out thread links + titles. It's best-effort: F95zone
-// doesn't document this endpoint, and full results likely need a logged-in
-// session cookie (set in Settings).
-func (a *App) harvestListingPage(ctx context.Context, bf *browserFetcher, pageURL string) ([]Release, error) {
-	tctx, cancel := context.WithTimeout(bf.ctx, 60*time.Second)
-	defer cancel()
-	stop := context.AfterFunc(ctx, cancel)
-	defer stop()
-	var found []harvestedLink
-	var bodyText string
-	err := chromedp.Run(tctx,
-		chromedp.Navigate(pageURL),
-		chromedp.Sleep(4*time.Second),
-		chromedp.Evaluate(harvestJS, &found),
-		chromedp.Text("body", &bodyText, chromedp.ByQuery, chromedp.NodeVisible),
-	)
+type listDataResp struct {
+	Status string `json:"status"`
+	Msg    struct {
+		Data       []listDataItem `json:"data"`
+		Pagination struct {
+			Page  int `json:"page"`
+			Total int `json:"total"` // total PAGES, not items
+		} `json:"pagination"`
+	} `json:"msg"`
+}
+
+// fetchListingDataPage calls listDataURLTemplate for one page and returns
+// the releases found on it plus the total page count the API itself
+// reports, so callers don't need to guess when to stop.
+func (a *App) fetchListingDataPage(ctx context.Context, cfg Config, page int) ([]Release, int, error) {
+	u := fmt.Sprintf(listDataURLTemplate, page)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	// The listing itself gates on being logged in - F95zone serves a plain
-	// "Sorry, you have to be logged in to access this page" response (still
-	// HTTP 200) instead of the Angular shell when site_cookie is missing,
-	// expired, or otherwise not accepted, so the Angular app never boots and
-	// the page genuinely has zero /threads/ links on it. Without this check
-	// that silently looks identical to "the listing really is empty", which
-	// it almost never actually is - surface it as a clear, actionable error
-	// instead of a confusing "0 thread link(s) found" on every single page.
-	if len(found) == 0 && strings.Contains(strings.ToLower(bodyText), "have to be logged in") {
-		return nil, errors.New(`listing page requires a logged-in session ("you have to be logged in") - the site_cookie in Settings is missing, expired, or not being accepted; use "Check F95zone login" in Settings to verify it`)
+	req.Header.Set("User-Agent", cfg.UserAgent)
+	req.Header.Set("Accept", "application/json")
+	if cfg.SiteCookie != "" {
+		req.Header.Set("Cookie", cfg.SiteCookie)
 	}
-	var out []Release
-	for _, h := range found {
-		if !threadHrefRe.MatchString(h.Link) {
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, 0, err
+	}
+	var d listDataResp
+	if err := json.Unmarshal(b, &d); err != nil {
+		return nil, 0, fmt.Errorf("could not parse listing JSON: %w", err)
+	}
+	if d.Status != "ok" {
+		return nil, 0, fmt.Errorf("listing API returned status %q", d.Status)
+	}
+	out := make([]Release, 0, len(d.Msg.Data))
+	for _, it := range d.Msg.Data {
+		if it.ThreadID == 0 || it.Title == "" {
 			continue
 		}
-		r := Release{Link: h.Link, Title: h.Title, ImageURLs: []string{}}
+		r := Release{Link: fmt.Sprintf("%s/threads/%d/", f95BaseURL, it.ThreadID), Title: it.Title, ImageURLs: []string{}}
 		r.Labels, r.Engine, r.Version = parseTitleBrackets(r.Title)
 		out = append(out, r)
 	}
-	return out, nil
+	return out, d.Msg.Pagination.Total, nil
 }
 
 // ──────────────────────────────────────────────────────────────

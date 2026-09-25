@@ -628,25 +628,17 @@ func (a *App) RunScheduler(ctx context.Context) {
 
 // ── backfill: harvest older releases from the client-rendered listing pages ──
 
-// fetchListingItems walks up to `pages` pages of the same listing backfill
-// uses (cfg.BackfillURLTemplate) and returns every thread link found, in
-// listing order, deduped only against other links seen in this same walk.
-// Unlike backfill's discovery loop this deliberately does NOT skip links
-// already in the database - the regular pipeline needs to see already-known
-// threads again too, so it can pick up a version bump on one (checkAndNotify)
-// and not just brand-new releases. Always uses the headless browser for the
-// listing itself (it's a client-rendered Angular page) regardless of
-// cfg.FetchMode, which only controls how each thread page is then enriched.
+// fetchListingItems walks up to `pages` pages of F95zone's own listing JSON
+// API (listDataURLTemplate - the same one backfill uses) and returns every
+// thread found, in listing order, deduped only against other links seen in
+// this same walk. Unlike backfill's discovery loop this deliberately does
+// NOT skip links already in the database - the regular pipeline needs to see
+// already-known threads again too, so it can pick up a version bump on one
+// (checkAndNotify) and not just brand-new releases.
 func (a *App) fetchListingItems(ctx context.Context, cfg Config, pages int) ([]Release, error) {
 	if pages < 1 {
 		pages = 1
 	}
-	bf, err := newBrowserFetcher(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("could not start Chromium for the listing pages: %w", err)
-	}
-	defer bf.Close()
-
 	seen := map[string]bool{}
 	var out []Release
 	failures := 0
@@ -654,10 +646,9 @@ func (a *App) fetchListingItems(ctx context.Context, cfg Config, pages int) ([]R
 		if ctx.Err() != nil {
 			break
 		}
-		url := fmt.Sprintf(cfg.BackfillURLTemplate, page)
 		a.setProgress(func(p *Progress) { p.Status = "FETCHING"; p.Item = fmt.Sprintf("listing page %d/%d", page, pages) })
 		a.log.Info("Listing: loading page %d/%d", page, pages)
-		items, err := a.harvestListingPage(ctx, bf, url)
+		items, totalPages, err := a.fetchListingDataPage(ctx, cfg, page)
 		if err != nil {
 			if ctx.Err() != nil {
 				break
@@ -679,7 +670,10 @@ func (a *App) fetchListingItems(ctx context.Context, cfg Config, pages int) ([]R
 			out = append(out, it)
 			added++
 		}
-		a.log.Info("Listing: page %d - %d thread link(s)", page, added)
+		a.log.Info("Listing: page %d/%d - %d thread link(s)", page, totalPages, added)
+		if totalPages > 0 && page >= totalPages {
+			break
+		}
 		if page < pages {
 			select {
 			case <-ctx.Done():
@@ -728,38 +722,27 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 
 	a.log.Info("============================================================")
 	a.log.Info("Starting backfill: up to %d listing page(s)", pages)
-	if cfg.SiteCookie == "" {
-		a.log.Warn("No site_cookie set in Settings - the listing page likely needs a logged-in F95zone session to return results")
-	}
-
-	bf, err := newBrowserFetcher(ctx, cfg)
-	if err != nil {
-		a.log.Error("Backfill: could not start Chromium: %v", err)
-		finish("error", err.Error())
-		return
-	}
-	defer bf.Close()
 
 	existing := a.store.db.AllLinks()
 	seen := map[string]bool{}
 	var discovered []Release
 	consecutiveEmpty := 0
+	failures := 0
 
 	for page := 1; page <= pages; page++ {
 		if ctx.Err() != nil {
 			break
 		}
-		url := fmt.Sprintf(cfg.BackfillURLTemplate, page)
 		a.setProgress(func(p *Progress) { p.Status = "FETCHING"; p.Item = fmt.Sprintf("listing page %d/%d", page, pages) })
 		a.log.Info("Backfill: loading listing page %d/%d", page, pages)
-		items, err := a.harvestListingPage(ctx, bf, url)
+		items, totalPages, err := a.fetchListingDataPage(ctx, cfg, page)
 		if err != nil {
 			if ctx.Err() != nil {
 				break
 			}
 			a.log.Warn("Backfill: page %d failed to load: %v", page, err)
-			consecutiveEmpty++
-			if consecutiveEmpty >= 2 {
+			failures++
+			if failures >= 2 {
 				a.log.Warn("Backfill: stopping after repeated failures")
 				break
 			}
@@ -774,7 +757,7 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 			discovered = append(discovered, it)
 			fresh++
 		}
-		a.log.Info("Backfill: page %d - %d thread link(s) found, %d new", page, len(items), fresh)
+		a.log.Info("Backfill: page %d/%d - %d thread link(s) found, %d new", page, totalPages, len(items), fresh)
 		if fresh == 0 {
 			consecutiveEmpty++
 		} else {
@@ -782,6 +765,9 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 		}
 		if consecutiveEmpty >= 3 {
 			a.log.Info("Backfill: 3 pages in a row with nothing new, stopping early")
+			break
+		}
+		if totalPages > 0 && page >= totalPages {
 			break
 		}
 		if page < pages {
@@ -803,6 +789,13 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 
 	var fetcher Fetcher
 	if cfg.FetchMode == "browser" {
+		bf, err := newBrowserFetcher(ctx, cfg)
+		if err != nil {
+			a.log.Error("Backfill: could not start Chromium for enrichment: %v", err)
+			finish("error", err.Error())
+			return
+		}
+		defer bf.Close()
 		fetcher = bf
 	} else {
 		fetcher = newHTTPFetcher(cfg)
