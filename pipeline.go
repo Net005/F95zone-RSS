@@ -137,6 +137,9 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		rec.Duration = rec.Finished.Sub(rec.Started).Seconds()
 		a.store.AddRun(rec)
 		ps := map[string]string{"ok": "DONE", "cache": "DONE", "error": "ERROR", "cancelled": "CANCELLED"}[status]
+		if status == "error" {
+			a.notifyFailure(cfg, "Enrichment run", errMsg)
+		}
 		a.end(ps)
 	}
 	defer func() {
@@ -284,6 +287,13 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		finish("cancelled", "")
 		return
 	}
+	// Every item failing enrichment usually means scraping is broken (site layout
+	// change, expired session cookie, Cloudflare block) rather than N unrelated
+	// thread-level errors, so it's worth a failure alert even though the run
+	// otherwise "succeeds" (feed still built from whatever data existed before).
+	if rec.Items > 0 && rec.Enriched == 0 && rec.Reused == 0 && rec.Failed == rec.Items {
+		a.notifyFailure(cfg, "Enrichment run", fmt.Sprintf("all %d items failed to enrich - check the site cookie and live log", rec.Failed))
+	}
 	if err := a.GenerateFeed(out); err != nil {
 		a.log.Error("Feed build failed: %v", err)
 		finish("error", err.Error())
@@ -365,6 +375,28 @@ func (a *App) checkAndNotify(cfg Config, hadExisting bool, existing, fresh Relea
 			a.store.db.MarkPushed(id, "")
 		}
 	}
+}
+
+const failureAlertDateKey = "failure_alert_date"
+
+// notifyFailure sends a Pushover alert for a pipeline/backfill/auth failure,
+// but at most once per UTC day, so a scheduler that keeps retrying every few
+// hours doesn't spam the phone with the same underlying problem.
+func (a *App) notifyFailure(cfg Config, context, msg string) {
+	if !cfg.PushoverEnabled {
+		return
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if v, ok := a.store.db.GetSetting(failureAlertDateKey); ok && v == today {
+		return
+	}
+	title := "F95Zone RSS: " + context + " failed"
+	if pushErr := SendPushover(cfg, title, msg, cfg.PublicBaseURL); pushErr != "" {
+		a.log.Warn("Pushover failure alert could not be sent: %s", pushErr)
+		return
+	}
+	a.store.db.SetSetting(failureAlertDateKey, today)
+	a.log.Info("Pushover failure alert sent (further failure alerts are suppressed until tomorrow)")
 }
 
 func joinLimited(v []string, n int) string {
@@ -552,6 +584,9 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 		rec.Duration = rec.Finished.Sub(rec.Started).Seconds()
 		a.store.AddRun(rec)
 		ps := map[string]string{"ok": "DONE", "error": "ERROR", "cancelled": "CANCELLED"}[status]
+		if status == "error" {
+			a.notifyFailure(cfg, "Backfill", errMsg)
+		}
 		a.end(ps)
 	}
 	defer func() {

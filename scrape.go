@@ -331,14 +331,22 @@ func findPost(doc *goquery.Document) *goquery.Selection {
 // the page HTML for guests too, just visually collapsed) and drops only the
 // "SPOILER" toggle button/title around it. Earlier versions of this scraper
 // removed spoilers outright, which silently ate the Genre line on most threads.
+//
+// .bbCodeBlock--spoiler is unwrapped the same way as .bbCodeSpoiler: for a
+// logged-in session (site_cookie set to a valid cookie) F95zone renders the
+// real field content inside it, same as any other spoiler. Only for a guest
+// (or an expired cookie) does it contain the fixed "you don't have permission
+// to view the spoiler content" notice instead - stripGated() is the safety
+// net that scrubs that sentence back out of extracted field/description text
+// so it never ends up stored as a "genre" or as the description.
 func unwrapSpoilers(post *goquery.Selection) {
 	for i := 0; i < 6; i++ {
-		sp := post.Find(".bbCodeSpoiler")
+		sp := post.Find(".bbCodeSpoiler, .bbCodeBlock--spoiler")
 		if sp.Length() == 0 {
 			return
 		}
 		sp.Each(func(_ int, s *goquery.Selection) {
-			inner := s.Find(".bbCodeSpoiler-content")
+			inner := s.Find(".bbCodeSpoiler-content, .bbCodeBlock-content").First()
 			var h string
 			if inner.Length() > 0 {
 				h, _ = inner.Html()
@@ -352,11 +360,9 @@ func unwrapSpoilers(post *goquery.Selection) {
 
 func cleanPost(post *goquery.Selection) {
 	unwrapSpoilers(post)
-	// A spoiler that's actually gated behind login/registration doesn't come
-	// through as real content even after unwrapping - F95zone renders a fixed
-	// "you don't have permission..." placeholder block instead. Drop those so
-	// they don't end up stored as the description or a "genre".
-	post.Find(".bbCodeBlock--spoiler, .messageHide").Remove()
+	// .messageHide is F95zone's separate "register to view" gate (not a spoiler
+	// block) - it never carries field values we want, so it's always dropped.
+	post.Find(".messageHide").Remove()
 	post.Find(".bbCodeBlock-title, .bbCodeBlock-expandLink, .bbCodeBlock-shrinkLink").Remove()
 }
 
@@ -409,6 +415,7 @@ func extractDescription(inner, fullText string) (string, bool) {
 		}
 		desc = strings.ReplaceAll(t, "\n", "<br>")
 	}
+	desc = stripGated(desc)
 	return strings.TrimSpace(desc), strings.TrimSpace(desc) != ""
 }
 

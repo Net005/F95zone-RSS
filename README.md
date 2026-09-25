@@ -53,7 +53,10 @@ as your own account, open the site in a browser where you're logged in, copy the
 (devtools -> Network -> any request to f95zone.to -> Headers -> Cookie), and paste the whole value into
 Settings > Site session cookie. It's sent as-is on every enrichment and backfill request, for both `http` and
 `browser` fetch modes, and is never sent anywhere else. Re-scrape a thread (or wait for the next scheduled
-run) to pick up tags once the cookie is set.
+run) to pick up tags once the cookie is set. Spoiler-gated fields (Genre and others are often wrapped in a
+spoiler tag) are unfolded and used like any other spoiler when the cookie is valid and F95zone serves the
+real content; only the "you don't have permission to view the spoiler content" placeholder itself (shown to
+guests or with an expired cookie) is filtered back out.
 
 ## Release database & backfill
 Every release ever scraped is kept in SQLite (`releases`, `release_tags`, `notifications` tables) - the RSS
@@ -64,6 +67,13 @@ links, and enrich any not already in the database. That listing is a client-rend
 always uses the headless-browser fetch mode regardless of the configured fetch mode, and - like most of the
 site - likely needs the site session cookie above to return full pages. Backfilled items are not sent to
 notifications/Pushover. Backfill stops early after several consecutive empty pages.
+
+## Failure alerts
+When Pushover is enabled, a pipeline run or backfill that ends in an error (RSS fetch failure, Chromium
+launch failure, every item failing enrichment in one run - commonly an expired site cookie or a Cloudflare
+block) sends one Pushover alert. Further failures on the same UTC day are suppressed so a scheduler retrying
+every few hours doesn't spam your phone with the same underlying problem; the next alert can go out the
+following day (or immediately after a run that finishes without error resets nothing - it's purely date-based).
 
 ## Tag, engine and version parsing
 Genre is parsed from the thread's own metadata block (the same "Thread Updated / Release Date / Developer /
