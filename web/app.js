@@ -212,8 +212,8 @@ $('#tagChips').onclick = e => {
 
 function renderTagOptions(filter) {
   const f = (filter || '').toLowerCase();
-  const list = allTags.filter(t => !f || t.tag.toLowerCase().includes(f)).slice(0, 150);
-  $('#tagOptions').innerHTML = list.map(t => `<label class="tagoption"><input type="checkbox" data-t="${esc(t.tag)}" ${relState.tags.includes(t.tag) ? 'checked' : ''}> ${esc(t.tag)}<span class="c">${t.count}</span></label>`).join('') || '<div class="muted small" style="padding:6px">No tags yet</div>';
+  const list = allTags.filter(t => !f || t.value.toLowerCase().includes(f)).slice(0, 150);
+  $('#tagOptions').innerHTML = list.map(t => `<label class="tagoption" title="${esc(t.value)}"><input type="checkbox" data-t="${esc(t.value)}" ${relState.tags.includes(t.value) ? 'checked' : ''}><span class="t">${esc(t.value)}</span><span class="c">${t.count}</span></label>`).join('') || '<div class="muted small" style="padding:6px">No tags yet</div>';
 }
 $('#tagPickerBtn').onclick = () => { const p = $('#tagPanel'); p.hidden = !p.hidden; if (!p.hidden) { $('#tagPanelSearch').value = ''; renderTagOptions(''); $('#tagPanelSearch').focus(); } };
 $('#tagPanelSearch').oninput = e => renderTagOptions(e.target.value);

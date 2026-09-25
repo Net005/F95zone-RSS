@@ -178,14 +178,16 @@ h4{margin:18px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.8px
 /* nav badge */
 .badge{display:inline-block;background:var(--accent);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px;vertical-align:2px}
 
-/* tag picker / chips */
-.tagbar{align-items:flex-start;flex-wrap:wrap}
+/* tag picker / engine filter / chips - all live in one filter row */
+.filterbar{align-items:center;flex-wrap:wrap;row-gap:8px}
+.filterbar #relEngine{min-width:150px}
 .tagpicker{position:relative}
 .tagpanel{position:absolute;top:calc(100% + 6px);left:0;width:280px;max-height:320px;background:#1c1c1c;border:1px solid var(--line2);border-radius:var(--radius);box-shadow:0 8px 24px #000c;padding:8px;z-index:15;display:flex;flex-direction:column;gap:6px}
 .tagoptions{overflow:auto;max-height:250px;display:flex;flex-direction:column}
 .tagoption{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:3px;cursor:pointer;font-size:13px}
 .tagoption:hover{background:#2a2a2a}
-.tagoption .c{color:var(--muted);font-size:11px;margin-left:auto}
+.tagoption .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tagoption .c{color:var(--muted);font-size:11px;flex-shrink:0}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{display:inline-flex;align-items:center;gap:6px;background:var(--accent-soft);border:1px solid var(--accent2);color:#f3c7c9;padding:3px 6px 3px 10px;border-radius:14px;font-size:12px}
 .chip button{background:none;border:0;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0 2px;opacity:.8}

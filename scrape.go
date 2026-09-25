@@ -101,12 +101,18 @@ func orDefault(s, d string) string {
 
 var bracketRe = regexp.MustCompile(`\[(.*?)\]`)
 
+// engineNames mirrors F95zone's own "Prefix: Engine" list (ADRIFT, Flash, Godot, HTML,
+// Java, Others, QSP, RAGS, RPGM, Ren'Py, Tads, Unity, Unreal Engine, WebGL, Wolf RPG),
+// so the Engine filter's values match what the site itself uses as thread prefixes.
 var engineNames = map[string]string{
 	"rpgm": "RPGM", "rpg maker": "RPGM", "rpg maker mv": "RPGM", "rpg maker vx": "RPGM",
 	"unity": "Unity", "ren'py": "Ren'Py", "renpy": "Ren'Py", "qsp": "QSP", "html": "HTML",
 	"rags": "RAGS", "java": "Java", "flash": "Flash", "adrift": "ADRIFT", "wolf rpg": "Wolf RPG",
 	"unreal engine": "Unreal Engine", "unreal": "Unreal Engine", "webgl": "WebGL", "godot": "Godot",
-	"tads": "TADS", "gamemaker": "GameMaker studio", "ocean": "Ocean",
+	"tads": "Tads", "others": "Others",
+	// Not on F95zone's own engine list, but seen in the wild as title-bracket tokens -
+	// kept so they're still recognized as an engine rather than mis-sorted as a label.
+	"gamemaker": "Others", "ocean": "Others",
 }
 
 var statusWords = map[string]string{

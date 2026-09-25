@@ -80,7 +80,8 @@ following day (or immediately after a run that finishes without error resets not
 Genre is parsed from the thread's own metadata block (the same "Thread Updated / Release Date / Developer /
 Censored / Version / OS / Language / Store / Genre" block F95zone shows on every game thread) and becomes the
 release's Tags, comma-split and trimmed. Labels (things like "COMPLETED", "ABANDONED", the raw title-bracket
-text) and Engine (Ren'Py, Unreal, RPGM, Unity, Godot, HTML, Flash, ... matched against title brackets) are
+text) and Engine (matched against title brackets using F95zone's own "Prefix: Engine" list - ADRIFT, Flash,
+Godot, HTML, Java, Others, QSP, RAGS, RPGM, Ren'Py, Tads, Unity, Unreal Engine, WebGL, Wolf RPG) are
 kept as separate fields. Version prefers the thread's own explicit "Version:" field and falls back to the
 title-bracket guess only when the thread doesn't state one. Existing rows imported from an older parser
 version are automatically re-scraped once after an upgrade like this to pick up corrected values.

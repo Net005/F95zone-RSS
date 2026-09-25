@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	appVersion       = "6.2.0"
+	appVersion       = "6.3.0"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"

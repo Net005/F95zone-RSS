@@ -82,7 +82,6 @@
 <section id="v-releases" class="view">
   <div class="toolbar sticky">
     <input id="relSearch" class="in grow" placeholder="Search titles...">
-    <select id="relEngine" class="in"><option value="">All engines</option></select>
     <select id="relSort" class="in">
       <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
       <option value="recent">Recently checked</option><option value="title">Title A-Z</option>
@@ -90,7 +89,7 @@
     <label class="chk"><input type="checkbox" id="relFailed"> Failed only</label>
     <label class="chk"><input type="checkbox" id="relWatched"> Monitored only</label>
   </div>
-  <div class="toolbar tagbar">
+  <div class="toolbar filterbar">
     <div class="tagpicker">
       <button type="button" class="btn sm" id="tagPickerBtn">Tags &#9662;</button>
       <div class="tagpanel" id="tagPanel" hidden>
@@ -98,6 +97,7 @@
         <div class="tagoptions" id="tagOptions"></div>
       </div>
     </div>
+    <select id="relEngine" class="in sm"><option value="">All engines</option></select>
     <div class="chips" id="tagChips"></div>
     <span class="spacer"></span>
     <select class="in sm" id="filterSets"><option value="">Saved filters...</option></select>
