@@ -7,10 +7,41 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 )
+
+// normalizeSiteCookie fixes the single most common way a pasted site_cookie
+// value breaks silently: cookie pairs joined with "," instead of the "; "
+// an HTTP Cookie header actually requires (easy to end up with when copying
+// individual cookie rows out of a browser's dev tools one at a time and
+// joining them by hand). A raw header copied straight from the Network tab
+// already uses "; " and is left untouched. Without this, a comma-joined
+// value is sent as a single malformed Cookie header - the server parses it
+// as one giant cookie and every pair after the first comma (commonly
+// xf_session) is silently dropped, so the session never looks logged in no
+// matter how fresh the cookie is.
+func normalizeSiteCookie(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.Contains(raw, ";") {
+		return raw
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) < 2 {
+		return raw
+	}
+	pairRe := regexp.MustCompile(`^[A-Za-z0-9_\-]+=.+$`)
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if !pairRe.MatchString(p) {
+			return raw // doesn't look like comma-joined cookie pairs - leave it alone
+		}
+		parts[i] = p
+	}
+	return strings.Join(parts, "; ")
+}
 
 const (
 	appVersion       = "6.4.0"
@@ -124,7 +155,7 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.UserAgent) == "" {
 		c.UserAgent = defaultUA
 	}
-	c.SiteCookie = strings.TrimSpace(c.SiteCookie)
+	c.SiteCookie = normalizeSiteCookie(c.SiteCookie)
 	if strings.TrimSpace(c.BackfillURLTemplate) == "" {
 		c.BackfillURLTemplate = defaultBackfillTemplate
 	}
