@@ -175,6 +175,7 @@ h4{margin:18px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.8px
 .pager button:hover:not(:disabled){background:#2c2c2c}
 .pager button.on{background:var(--accent);border-color:var(--accent2);color:#fff}
 .pager button:disabled{opacity:.35;cursor:default}
+.scrollend{display:flex;align-items:center;justify-content:center;margin:18px 0 6px;min-height:32px}
 
 .hr{border-top:1px solid var(--line);margin:14px 0}
 

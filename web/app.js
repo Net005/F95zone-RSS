@@ -240,45 +240,90 @@ async function loadReleases() {
     sel.innerHTML = '<option value="">All engines</option>' + engines.map(e => `<option value="${esc(e.value)}">${esc(e.value)} (${e.count})</option>`).join('');
     sel.value = relState.engine;
   } catch {}
+  setupScrollObserver();
   await queryReleases();
 }
 
 let relTimer;
-function renderPager(el, page, pages) {
-  if (pages <= 1) { el.innerHTML = ''; return; }
-  const btn = (p, label, disabled, on) => `<button data-p="${p}" ${disabled ? 'disabled' : ''} class="${on ? 'on' : ''}">${label}</button>`;
-  let html = btn(page - 1, '\u2039 Prev', page <= 1, false);
-  const win = 2;
-  for (let p = 1; p <= pages; p++) {
-    if (p === 1 || p === pages || Math.abs(p - page) <= win) html += btn(p, p, false, p === page);
-    else if (Math.abs(p - page) === win + 1) html += '<span class="muted">&hellip;</span>';
-  }
-  html += btn(page + 1, 'Next \u203a', page >= pages, false);
-  el.innerHTML = html;
-  el.onclick = e => { const b = e.target.closest('button[data-p]'); if (!b || b.disabled) return; relState.page = Number(b.dataset.p); queryReleases(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-}
 
-async function queryReleases() {
-  const p = new URLSearchParams({
-    q: relState.q, tags: relState.tags.join(','), engine: relState.engine, sort: relState.sort,
-    failed: relState.failed ? '1' : '0', page: relState.page, page_size: 60,
-  });
-  const r = await api('/api/releases?' + p);
-  $('#relCount').textContent = `${r.total} release${r.total === 1 ? '' : 's'}${r.pages > 1 ? ` · page ${r.page}/${r.pages}` : ''}`;
-  $('#relGrid').innerHTML = r.items.length ? r.items.map(x => `
+// ── infinite scroll: relState.page/pages track what's already loaded and
+// appended to #relGrid; a filter change starts over via queryReleases(true),
+// scrolling near the bottom (or clicking "Load more") appends the next page. ──
+let relLoading = false;
+let relScrollObserver;
+
+function tileHTML(x) {
+  return `
     <div class="tile" data-link="${esc(x.link)}">
       <div class="cv" style="${x.cover ? `background-image:url('${esc(x.cover)}')` : ''}">
         ${x.error ? '<span class="bad">FAILED</span>' : ''}${x.images ? `<span class="n">${x.images} img</span>` : ''}
       </div>
       <div class="tb"><div class="tt">${esc(x.title.replace(/^(\[[^\]]*\]\s*)+/, '') || x.title)}</div>
       <div class="tm">${x.labels.map(labelHTML).join('')}${engineHTML(x.engine)}${versionHTML(x.version)}<div>${ago(x.pub)}</div></div></div>
-    </div>`).join('') : '<div class="empty">No releases match. Run a scrape, backfill, or adjust the filters.</div>';
-  renderPager($('#pagerTop'), r.page, r.pages);
-  renderPager($('#pagerBottom'), r.page, r.pages);
+    </div>`;
 }
-$('#relSearch').oninput = () => { clearTimeout(relTimer); relTimer = setTimeout(() => { relState.q = $('#relSearch').value; relState.page = 1; persistFilter(); queryReleases(); }, 250); };
+
+function updateScrollEnd(page, pages, loading) {
+  const btn = $('#relLoadMore'), loadingEl = $('#relLoading'), endEl = $('#relEnd');
+  const more = pages > page;
+  btn.hidden = loading || !more;
+  loadingEl.hidden = !loading;
+  endEl.hidden = loading || more;
+}
+
+async function fetchReleasesPage(page) {
+  const p = new URLSearchParams({
+    q: relState.q, tags: relState.tags.join(','), engine: relState.engine, sort: relState.sort,
+    failed: relState.failed ? '1' : '0', page, page_size: 60,
+  });
+  return api('/api/releases?' + p);
+}
+
+// queryReleases(true) (the default) resets to page 1 and replaces the grid -
+// call this after any filter/sort change. queryReleases(false) is used
+// internally by loadMoreReleases and appends instead.
+async function queryReleases(reset = true) {
+  if (reset) {
+    relState.page = 1;
+    relState.pages = 1;
+    $('#relGrid').innerHTML = '';
+  }
+  if (relLoading) return;
+  relLoading = true;
+  updateScrollEnd(relState.page, relState.pages || 1, true);
+  try {
+    const r = await fetchReleasesPage(relState.page);
+    relState.pages = r.pages;
+    $('#relCount').textContent = `${r.total} release${r.total === 1 ? '' : 's'}${r.pages > 1 ? ` \u00b7 showing ${Math.min(relState.page * 60, r.total)} of ${r.total}` : ''}`;
+    if (r.items.length) {
+      $('#relGrid').insertAdjacentHTML('beforeend', r.items.map(tileHTML).join(''));
+    } else if (reset) {
+      $('#relGrid').innerHTML = '<div class="empty">No releases match. Run a scrape, backfill, or adjust the filters.</div>';
+    }
+  } finally {
+    relLoading = false;
+    updateScrollEnd(relState.page, relState.pages || 1, false);
+  }
+}
+
+async function loadMoreReleases() {
+  if (relLoading || relState.page >= (relState.pages || 1)) return;
+  relState.page += 1;
+  await queryReleases(false);
+}
+
+function setupScrollObserver() {
+  if (relScrollObserver || !('IntersectionObserver' in window)) return;
+  relScrollObserver = new IntersectionObserver(entries => {
+    if (entries.some(e => e.isIntersecting)) loadMoreReleases();
+  }, { rootMargin: '600px 0px' });
+  relScrollObserver.observe($('#relScrollEnd'));
+}
+$('#relLoadMore').onclick = () => loadMoreReleases();
+
+$('#relSearch').oninput = () => { clearTimeout(relTimer); relTimer = setTimeout(() => { relState.q = $('#relSearch').value; persistFilter(); queryReleases(); }, 250); };
 ['relEngine', 'relSort', 'relFailed'].forEach(id => $('#' + id).onchange = () => {
-  relState.engine = $('#relEngine').value; relState.sort = $('#relSort').value; relState.failed = $('#relFailed').checked; relState.page = 1;
+  relState.engine = $('#relEngine').value; relState.sort = $('#relSort').value; relState.failed = $('#relFailed').checked;
   persistFilter(); queryReleases();
 });
 $('#relGrid').onclick = e => { const t = e.target.closest('.tile'); if (t) openRelease(t.dataset.link); };

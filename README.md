@@ -21,10 +21,11 @@ Dashboard, Releases, Notifications, Live Log, Run History, Feed, Settings.
 
 * **Dashboard** - progress, run/force/full/stop, pause scheduler, storage tools, backfill-older-releases control.
 * **Releases** - full scrape history (not just the last 90 in the feed), search, multi-tag AND filter with a
-  tag picker + chips, engine filter, sort, pagination, saved filter sets (name a combination of filters and
-  recall it later - both the current filter and the saved sets persist in the browser across reloads).
-  Detail view shows the exact feed rendering plus Engine/Version/Developer/Thread-updated fields; click any
-  screenshot to open it full-size in a lightbox (Escape or click-outside to close).
+  tag picker + chips, engine filter, sort, saved filter sets (name a combination of filters and recall it
+  later - both the current filter and the saved sets persist in the browser across reloads). Infinite scroll
+  loads 60 releases at a time and appends more automatically as you near the bottom (with a manual "Load
+  more" fallback). Detail view shows the exact feed rendering plus Engine/Version/Developer/Thread-updated
+  fields; click any screenshot to open it full-size in a lightbox (Escape or click-outside to close).
 * **Notifications** - a card per new release or version change your monitoring caught, same detail layout as
   Releases, with per-item and clear-all/mark-all-read actions. Optional Pushover push (see below).
 * **Live Log** - SSE stream, level filter, search, follow/pause, download, clear.

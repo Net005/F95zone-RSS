@@ -105,11 +105,13 @@
   </div>
   <div class="toolbar">
     <span class="muted small" id="relCount"></span>
-    <span class="spacer"></span>
-    <div class="pager" id="pagerTop"></div>
   </div>
   <div class="tiles" id="relGrid"></div>
-  <div class="pager" id="pagerBottom"></div>
+  <div class="scrollend" id="relScrollEnd">
+    <button class="btn sm" id="relLoadMore" hidden>Load more</button>
+    <span class="muted small" id="relLoading" hidden>Loading more&hellip;</span>
+    <span class="muted small" id="relEnd" hidden>End of results</span>
+  </div>
 </section>
 
 <!-- Notifications -->
