@@ -200,13 +200,14 @@
     <div class="block-h"><span>Settings</span><span class="muted small">stored in the database</span></div>
     <div class="block-b form">
       <fieldset><legend>Source</legend>
-        <label class="lbl">Source RSS URL<input class="in" name="rss_source"></label>
         <label class="lbl">Public base URL <small>(used in feed links)</small><input class="in" name="public_base_url"></label>
         <label class="lbl">Backfill listing URL template <small>(%d is the page number)</small><input class="in" name="backfill_url_template"></label>
+        <label class="lbl">Source RSS URL <small>(unused - kept only for old settings)</small><input class="in" name="rss_source" disabled></label>
       </fieldset>
       <fieldset><legend>Schedule &amp; cache</legend>
         <div class="grid g3">
           <label class="lbl">Run every N hours<input class="in" type="number" min="1" max="24" name="schedule_hours"></label>
+          <label class="lbl">Listing pages per run <small>(same paging as backfill - discovers new releases and re-checks known ones for updates)</small><input class="in" type="number" min="1" max="50" name="scheduled_pages"></label>
           <label class="lbl">Cache TTL (hours)<input class="in" type="number" step="0.25" min="0" name="cache_ttl_hours"></label>
           <label class="lbl">Rate limit (ms)<input class="in" type="number" min="0" name="rate_limit_ms"></label>
         </div>

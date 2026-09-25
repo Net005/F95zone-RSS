@@ -23,6 +23,21 @@ type Server struct {
 	thr throttle
 }
 
+// noCacheUI forces every /ui/ asset (app.js, style.css, ...) to revalidate on
+// every request. embed.FS strips real file mtimes, so http.FileServerFS's
+// default Last-Modified/ETag handling is unreliable across rebuilds - a
+// browser can end up heuristically caching a stale app.js or style.css for
+// hours after a deploy, with no visible sign anything is wrong (the page
+// just quietly doesn't reflect the latest change). This is a small,
+// low-traffic admin panel, so always-fresh is worth far more than the
+// caching that would otherwise save.
+func noCacheUI(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		h.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	sub, _ := fs.Sub(webFS, "web")
@@ -39,7 +54,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/auth/status", s.authStatus)
 	mux.HandleFunc("POST /api/auth/login", s.login)
 	mux.HandleFunc("POST /api/auth/setup", s.setup)
-	mux.Handle("GET /ui/", http.StripPrefix("/ui/", http.FileServerFS(sub)))
+	mux.Handle("GET /ui/", http.StripPrefix("/ui/", noCacheUI(http.FileServerFS(sub))))
 	mux.Handle("GET /{$}", s.auth(http.HandlerFunc(s.indexPage)))
 	api := func(pattern string, h http.HandlerFunc) { mux.Handle(pattern, s.auth(h)) }
 	api("POST /api/auth/logout", s.logout)

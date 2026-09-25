@@ -45,6 +45,11 @@ func parseRSSDate(s string) string {
 	return t.Format("2006-01-02T15:04:05-07:00")
 }
 
+// fetchSourceRSS is no longer called by the pipeline or the login probe (see
+// fetchListingItems) - F95zone's source RSS caps out at ~90 rows and doesn't
+// reflect the real listing order, so every run now walks the same paged
+// listing backfill uses instead. Left in place only in case cfg.RSSSource is
+// ever useful again as a lightweight sanity check.
 func (a *App) fetchSourceRSS(ctx context.Context, cfg Config) ([]Release, error) {
 	a.log.Info("Fetching source RSS: %s", cfg.RSSSource)
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -659,6 +664,26 @@ func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Conf
 	fields := extractFields(inner)
 	r.ThreadUpdated = fields["thread updated"]
 	r.ReleaseDate = fields["release date"]
+	// A release discovered straight off the listing pages (fetchListingItems /
+	// backfill) has no PubDate - that used to come from the F95zone source RSS
+	// item, which regular runs no longer fetch. Fall back to the thread's own
+	// "Thread updated" (or "Release date") field so Published/sorting/the
+	// generated feed still have something to show; an already-known release
+	// keeps its original PubDate (pipeline.go carries it forward before this
+	// runs), so this only ever fires for a release seen for the first time.
+	if r.PubDateISO == "" {
+		for _, raw := range []string{r.ThreadUpdated, r.ReleaseDate} {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				continue
+			}
+			if t, err := time.Parse("2006-01-02", raw); err == nil {
+				r.PubDateRaw = raw
+				r.PubDateISO = t.UTC().Format("2006-01-02T15:04:05-07:00")
+				break
+			}
+		}
+	}
 	if r.Developer = fields["developer"]; r.Developer == "" {
 		r.Developer = fields["publisher"]
 	}
@@ -899,12 +924,12 @@ func (a *App) pickProbeThread(ctx context.Context, cfg Config) (link, title stri
 	if l, t, ok := a.store.db.MostRecentEnrichedLink(); ok {
 		return l, t, nil
 	}
-	items, err := a.fetchSourceRSS(ctx, cfg)
+	items, err := a.fetchListingItems(ctx, cfg, 1)
 	if err != nil {
 		return "", "", err
 	}
 	if len(items) == 0 {
-		return "", "", errors.New("source RSS feed returned no items")
+		return "", "", errors.New("listing page returned no items")
 	}
 	return items[0].Link, items[0].Title, nil
 }

@@ -44,7 +44,7 @@ func normalizeSiteCookie(raw string) string {
 }
 
 const (
-	appVersion       = "6.4.0"
+	appVersion       = "6.5.0"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
@@ -59,14 +59,25 @@ const (
 	// regardless of reuse_unchanged, so an upgrade like this one corrects existing history.
 	// v3 (6.4.0): tags now merge in the thread header's own tag list, engine/label now read from
 	// the thread's own prefix badges, and the Overview paragraph is extracted as its own field.
-	parserVersion = 3
+	// v4 (6.5.0): the site_cookie comma-vs-semicolon bug (fixed in normalizeSiteCookie) meant a
+	// lot of existing rows were enriched as a logged-out guest even with a cookie configured, so
+	// this bump forces one more re-scrape pass to pick up Genre/tags/Overview now that login works.
+	parserVersion = 4
 )
 
 // Config mirrors the original settings.json keys and adds a few new ones.
 // Missing keys keep their defaults, so old settings files keep working.
 type Config struct {
 	ScheduleHours    int     `json:"schedule_hours"`
+	// RSSSource is kept only so older settings.json/database values still decode, and as the
+	// probe URL format reference; scheduled/manual runs no longer fetch it (see ScheduledPages -
+	// F95zone's source RSS is capped at ~90 rows and doesn't reflect the real listing order, so
+	// every run now walks the same paged listing backfill uses instead).
 	RSSSource        string  `json:"rss_source"`
+	// ScheduledPages: how many pages of the listing (same paging as Dashboard's manual backfill,
+	// BackfillURLTemplate) a normal scheduled/manual run walks to discover both new and
+	// already-known threads (existing threads are re-checked for a version bump, not skipped).
+	ScheduledPages   int     `json:"scheduled_pages"`
 	MaxImages        int     `json:"max_images_per_release"`
 	RateLimitMS      int     `json:"rate_limit_ms"`
 	CacheTTLHours    float64 `json:"cache_ttl_hours"`
@@ -109,6 +120,7 @@ func defaultConfig() Config {
 	return Config{
 		ScheduleHours:         12,
 		RSSSource:             defaultRSSSource,
+		ScheduledPages:        3,
 		MaxImages:             8,
 		RateLimitMS:           800,
 		CacheTTLHours:         2,
@@ -131,6 +143,9 @@ func (c *Config) Validate() error {
 	c.RSSSource = strings.TrimSpace(c.RSSSource)
 	if c.ScheduleHours < 1 || c.ScheduleHours > 24 {
 		return errors.New("schedule_hours must be between 1 and 24")
+	}
+	if c.ScheduledPages < 1 || c.ScheduledPages > 50 {
+		return errors.New("scheduled_pages must be between 1 and 50")
 	}
 	if u, err := url.Parse(c.RSSSource); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return errors.New("rss_source must be a valid http(s) URL")

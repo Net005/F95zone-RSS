@@ -175,9 +175,9 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 	a.log.Info("============================================================")
 	a.log.Info("Starting F95Zone RSS enrichment pipeline (trigger: %s, mode: %s)", trigger, cfg.FetchMode)
 
-	items, err := a.fetchSourceRSS(ctx, cfg)
+	items, err := a.fetchListingItems(ctx, cfg, cfg.ScheduledPages)
 	if err != nil || len(items) == 0 {
-		msg := "no items in source RSS feed"
+		msg := "no items found on the listing pages"
 		if err != nil {
 			msg = err.Error()
 		}
@@ -186,7 +186,7 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		return
 	}
 	rec.Items = len(items)
-	a.log.Info("Source feed: %d items to enrich", len(items))
+	a.log.Info("Listing: %d item(s) across %d page(s) to enrich", len(items), cfg.ScheduledPages)
 	a.setProgress(func(p *Progress) { p.Total = len(items); p.Status = "ENRICHING" })
 
 	var fetcher Fetcher
@@ -219,12 +219,20 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		}
 		it := items[i]
 		existing, hadExisting := a.store.db.GetRelease(it.Link)
+		if hadExisting {
+			// fetchListingItems only carries Link/Title/Labels/Engine/Version - the
+			// original discovery date lives in the DB row and must be carried
+			// forward explicitly, or every already-known release would lose its
+			// Published date the moment it's seen again on a listing page.
+			it.PubDateRaw, it.PubDateISO = existing.PubDateRaw, existing.PubDateISO
+		}
 		a.log.Info("[%d/%d] %s", i+1, len(items), trunc(it.Title, 50))
 		a.setProgress(func(p *Progress) { p.Current = i + 1; p.Item = trunc(it.Title, 60) })
 
 		reused := false
 		if cfg.ReuseUnchanged && !full && hadExisting && existing.ParserVer == parserVersion &&
-			existing.Title == it.Title && existing.ExtraDescription != "" && existing.EnrichError == "" {
+			existing.Title == it.Title && existing.ExtraDescription != "" && existing.EnrichError == "" &&
+			existing.Overview != "" && len(existing.Tags) > 0 {
 			it.ExtraDescription, it.ImageURLs, it.HeaderImage, it.EnrichedAt = existing.ExtraDescription, existing.ImageURLs, existing.HeaderImage, existing.EnrichedAt
 			it.Tags, it.ThreadUpdated, it.ReleaseDate = existing.Tags, existing.ThreadUpdated, existing.ReleaseDate
 			it.Developer, it.Censored, it.OS, it.Language, it.Store = existing.Developer, existing.Censored, existing.OS, existing.Language, existing.Store
@@ -235,6 +243,8 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 			reused = true
 			rec.Reused++
 			a.log.Info("  Unchanged since last run, reusing enrichment")
+		} else if hadExisting && (existing.Overview == "" || len(existing.Tags) == 0) && existing.EnrichError == "" {
+			a.log.Info("  Re-scraping: missing tags or overview from a previous run")
 		}
 		if !reused {
 			if err := needFetcher(); err != nil {
@@ -556,6 +566,68 @@ func (a *App) RunScheduler(ctx context.Context) {
 }
 
 // ── backfill: harvest older releases from the client-rendered listing pages ──
+
+// fetchListingItems walks up to `pages` pages of the same listing backfill
+// uses (cfg.BackfillURLTemplate) and returns every thread link found, in
+// listing order, deduped only against other links seen in this same walk.
+// Unlike backfill's discovery loop this deliberately does NOT skip links
+// already in the database - the regular pipeline needs to see already-known
+// threads again too, so it can pick up a version bump on one (checkAndNotify)
+// and not just brand-new releases. Always uses the headless browser for the
+// listing itself (it's a client-rendered Angular page) regardless of
+// cfg.FetchMode, which only controls how each thread page is then enriched.
+func (a *App) fetchListingItems(ctx context.Context, cfg Config, pages int) ([]Release, error) {
+	if pages < 1 {
+		pages = 1
+	}
+	bf, err := newBrowserFetcher(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("could not start Chromium for the listing pages: %w", err)
+	}
+	defer bf.Close()
+
+	seen := map[string]bool{}
+	var out []Release
+	failures := 0
+	for page := 1; page <= pages; page++ {
+		if ctx.Err() != nil {
+			break
+		}
+		url := fmt.Sprintf(cfg.BackfillURLTemplate, page)
+		a.setProgress(func(p *Progress) { p.Status = "FETCHING"; p.Item = fmt.Sprintf("listing page %d/%d", page, pages) })
+		a.log.Info("Listing: loading page %d/%d", page, pages)
+		items, err := a.harvestListingPage(ctx, bf, url)
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			a.log.Warn("Listing: page %d failed to load: %v", page, err)
+			failures++
+			if failures >= 2 {
+				a.log.Warn("Listing: stopping after repeated page failures")
+				break
+			}
+			continue
+		}
+		added := 0
+		for _, it := range items {
+			if seen[it.Link] {
+				continue
+			}
+			seen[it.Link] = true
+			out = append(out, it)
+			added++
+		}
+		a.log.Info("Listing: page %d - %d thread link(s)", page, added)
+		if page < pages {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(cfg.RateLimitMS) * time.Millisecond):
+			}
+		}
+	}
+	return out, nil
+}
 
 func (a *App) StartBackfill(pages int) error {
 	if pages < 1 {
