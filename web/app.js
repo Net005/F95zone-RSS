@@ -229,6 +229,24 @@ document.addEventListener('click', e => {
   if (!panel.hidden && !panel.contains(e.target) && e.target !== btn) panel.hidden = true;
 });
 
+// ── cover size slider: persisted in localStorage so it survives both
+// browser reloads and app restarts (localStorage is unaffected by either). ──
+const LS_TILE_SIZE = 'f95_tile_size';
+function applyTileSize(px) {
+  document.documentElement.style.setProperty('--tile-min', px + 'px');
+}
+(function initTileSize() {
+  let v = parseInt(localStorage.getItem(LS_TILE_SIZE), 10);
+  if (!v || v < 160 || v > 520) v = 230;
+  $('#relTileSize').value = v;
+  applyTileSize(v);
+})();
+$('#relTileSize').oninput = e => {
+  const v = Number(e.target.value);
+  applyTileSize(v);
+  try { localStorage.setItem(LS_TILE_SIZE, String(v)); } catch {}
+};
+
 async function loadReleases() {
   loadPersistedFilter();
   applyFilterToControls();
