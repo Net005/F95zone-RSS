@@ -425,7 +425,6 @@ function overviewHTML(r) {
 }
 
 function detailHTML(r, d) {
-  const hero = d.cover;
   const info = [
     ['Developer', r.developer], ['Engine', r.engine], ['Version', r.version],
     ['Published', clock(r.pub_date_iso)], ['Thread updated', r.thread_updated],
@@ -433,11 +432,9 @@ function detailHTML(r, d) {
     ['Censored', r.censored], ['Store', r.store],
   ].filter(([, v]) => v);
   return `
-    <div class="rel-hero" style="${hero ? `background-image:url('${esc(hero)}')` : ''}">
-      <div class="rh-in">
-        <div class="rh-title">${esc(r.title.replace(/^(\[[^\]]*\]\s*)+/, '') || r.title)}</div>
-        <div class="rh-sub">${r.labels.map(labelHTML).join('')}${engineHTML(r.engine)}${versionHTML(r.version)}</div>
-      </div>
+    <div class="rel-head">
+      <div class="rh-title">${esc(r.title.replace(/^(\[[^\]]*\]\s*)+/, '') || r.title)}</div>
+      <div class="rh-sub">${r.labels.map(labelHTML).join('')}${engineHTML(r.engine)}${versionHTML(r.version)}</div>
     </div>
     <div class="btnrow" style="margin:0 0 14px">
       <a class="btn primary" href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">Open thread</a>
@@ -449,20 +446,36 @@ function detailHTML(r, d) {
       <div>
         <h4>Overview</h4>
         <div class="rel-desc">${overviewHTML(r)}</div>
+        ${r.changelog ? `<h4>Changelog</h4><div class="rel-changelog-compact">${esc(r.changelog.split(/\n{2,}/)[0])}</div><button type="button" class="btn sm" id="mChangelogBtn">Full changelog</button>` : ''}
       </div>
       <div>
         <h4>Info</h4>
         <dl class="rel-info">${info.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
         ${r.tags && r.tags.length ? `<h4>Tags</h4><div class="rel-tags">${r.tags.map(tagChipHTML).join('')}</div>` : ''}
         ${r.downloads && r.downloads.length ? `<h4>Downloads</h4><div class="rel-downloads">${r.downloads.map(dl => `<a class="dl-link" href="${esc(dl.url)}" target="_blank" rel="noopener noreferrer">${esc(dl.host)}</a>`).join('')}</div>` : ''}
-        ${r.changelog ? `<h4>Changelog</h4><div class="rel-changelog-compact">${esc(r.changelog.split(/\n{2,}/)[0])}</div><button type="button" class="btn sm" id="mChangelogBtn">Full changelog</button>` : ''}
       </div>
     </div>
     ${d.images.length ? `<h4>Screenshots</h4><div class="shots">${d.images.map((u, i) => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}" data-idx="${i}">`).join('')}</div>` : ''}`;
 }
 
+// Changelogs are often one block per version ("v0.3 REBUILD\n\nFeature: ...").
+// Split on a leading version-looking line so the full view reads as sections
+// instead of one long undifferentiated wall of paragraphs.
+const changelogVersionLineRe = /^(v?\d+[\w.\-]*|\[\s*(?:update|new|changelog)[^\]]*\])\s*[:\-]?\s*$/i;
 function changelogModalHTML(text) {
-  return text.split(/\n{2,}/).map(p => `<p>${esc(p)}</p>`).join('');
+  const paras = text.split(/\n{2,}/).filter(p => p.trim());
+  let html = '';
+  for (const p of paras) {
+    const firstLine = p.split('\n')[0].trim();
+    if (changelogVersionLineRe.test(firstLine)) {
+      const rest = p.slice(firstLine.length).trim();
+      html += `<h5>${esc(firstLine)}</h5>`;
+      if (rest) html += `<p>${esc(rest)}</p>`;
+    } else {
+      html += `<p>${esc(p)}</p>`;
+    }
+  }
+  return html || '<span class="muted">No changelog available.</span>';
 }
 function openChangelogModal(title, text) {
   $('#clTitle').textContent = 'Changelog — ' + title;

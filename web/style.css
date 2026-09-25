@@ -122,7 +122,7 @@ legend{padding:0 8px;color:var(--accent);font-weight:700;font-size:13px;text-tra
 .tile .cv .n{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.75);font-size:12px;padding:1px 6px;border-radius:3px}
 .tile .cv .bad{position:absolute;left:6px;top:6px;background:var(--err);font-size:11px;font-weight:700;padding:1px 6px;border-radius:3px}
 .tile .tb{padding:9px 11px}
-.tile .tt{font-weight:600;color:#fff;font-size:14px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:34px}
+.tile .tt{font-weight:700;color:#fff;font-size:16px;line-height:1.32;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:42px}
 .tile .tm{margin-top:6px;font-size:12px;color:var(--muted)}
 .empty{grid-column:1/-1;text-align:center;color:var(--muted);padding:50px 0}
 
@@ -134,19 +134,18 @@ legend{padding:0 8px;color:var(--accent);font-weight:700;font-size:13px;text-tra
 .modal-h{display:flex;justify-content:space-between;gap:12px;padding:10px 16px;background:var(--panel2);font-weight:700;font-size:16px;color:#fff;flex:none}
 .x{background:none;border:0;color:#aaa;font-size:27px;line-height:1;cursor:pointer}.x:hover{color:#fff}
 .modal-b{padding:14px;overflow:auto}
-.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:10px 0;max-height:220px;overflow:auto;padding-right:2px}
+.shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin:10px 0;max-height:38vh;overflow:auto;padding-right:2px}
 .shots img{width:100%;height:110px;object-fit:cover;border-radius:3px;border:1px solid var(--line);cursor:zoom-in;background:#000}
 iframe.pv{width:100%;border:0;background:transparent;display:block}
 h4{margin:12px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.8px;color:var(--accent)}
 h4:first-child{margin-top:0}
 
-/* release overview (modal detail) - a slim strip, not a hero: the detail view
-   fits one screen where reasonable, so the banner shouldn't dominate it. */
-.rel-hero{position:relative;width:100%;height:240px;background:#0c0c0c center/contain no-repeat;border-radius:var(--radius);overflow:hidden;margin-bottom:10px}
-.rel-hero::after{content:"";position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,.8),rgba(0,0,0,0) 65%)}
-.rel-hero .rh-in{position:absolute;left:0;right:0;bottom:0;padding:8px 14px}
-.rel-hero .rh-title{font-size:17px;font-weight:800;color:#fff;line-height:1.25}
-.rel-hero .rh-sub{margin-top:3px;color:#ddd;font-size:13px}
+/* release overview (modal detail) - no header banner: title/badges sit in a
+   slim text header instead, so the whole detail fits one screen without the
+   outer modal body needing to scroll. */
+.rel-head{padding:2px 0 12px}
+.rel-head .rh-title{font-size:19px;font-weight:800;color:#fff;line-height:1.3}
+.rel-head .rh-sub{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px}
 .rel-layout{display:grid;grid-template-columns:3fr 2fr;gap:16px}
 @media(max-width:760px){.rel-layout{grid-template-columns:1fr}}
 .rel-info{display:grid;grid-template-columns:1fr 1fr;gap:5px 16px;font-size:14px}
@@ -155,14 +154,16 @@ h4:first-child{margin-top:0}
 .rel-downloads{display:flex;flex-wrap:wrap;gap:6px}
 .dl-link{display:inline-flex;align-items:center;background:#2a2d34;border:1px solid var(--line2);color:#eee;padding:4px 10px;border-radius:var(--radius);font-size:13px;font-weight:600;text-decoration:none!important}
 .dl-link:hover{background:#343841}
-.rel-changelog-compact{background:#181818;border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;font-size:13.5px;line-height:1.5;color:#ccc;margin-bottom:8px;
+.rel-changelog-compact{background:#181818;border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;font-size:14px;line-height:1.55;color:#ccc;margin-bottom:8px;
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-#changelogBox{width:min(760px,92vw)}
+#changelogBox{width:min(1000px,94vw)}
 #clBody{font-size:14px;line-height:1.65;color:#ddd}
-#clBody p{margin:0 0 14px}
+#clBody h5{margin:18px 0 8px;font-size:15px;color:var(--accent);border-bottom:1px solid var(--line);padding-bottom:4px}
+#clBody h5:first-child{margin-top:0}
+#clBody p{margin:0 0 12px}
 #clBody p:last-child{margin-bottom:0}
 @media(max-width:520px){.rel-info{grid-template-columns:1fr}.rel-info dd{text-align:left}}
-.rel-desc{background:#181818;border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;font-size:15px;line-height:1.7;color:#ddd;max-height:min(60vh,520px);overflow:auto}
+.rel-desc{background:#181818;border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;font-size:15px;line-height:1.7;color:#ddd;max-height:min(34vh,320px);overflow:auto}
 .rel-desc p{margin:0 0 14px}
 .rel-desc p:last-child{margin-bottom:0}
 .rel-desc iframe.pv{background:transparent}
