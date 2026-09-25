@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -385,6 +386,66 @@ func (a *App) checkAndNotify(cfg Config, hadExisting bool, existing, fresh Relea
 }
 
 const failureAlertDateKey = "failure_alert_date"
+const loginAlertDateKey = "login_alert_date"
+
+// RunLoginCheckScheduler periodically re-probes CheckF95Login independently
+// of the scrape schedule, so a cookie that quietly expires is caught (and
+// Pushover-alerted) even during a stretch where nothing new needs enriching
+// and the main pipeline's own alerting never gets a chance to fire.
+func (a *App) RunLoginCheckScheduler(ctx context.Context) {
+	for {
+		cfg := a.cfg.Get()
+		var timer <-chan time.Time
+		if cfg.LoginCheckHours > 0 {
+			timer = time.After(time.Duration(cfg.LoginCheckHours) * time.Hour)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.cfg.changed:
+			continue
+		case <-timer:
+		}
+		cfg = a.cfg.Get()
+		if cfg.LoginCheckHours <= 0 || strings.TrimSpace(cfg.SiteCookie) == "" {
+			continue
+		}
+		if a.IsRunning() {
+			// a scrape/backfill is already using the browser - skip this tick
+			// rather than queue behind it; the next tick will catch up.
+			continue
+		}
+		res, err := a.CheckF95Login(ctx)
+		if err != nil {
+			a.log.Warn("Periodic login check failed: %v", err)
+			continue
+		}
+		if res.LoggedIn {
+			a.log.Info("Periodic login check: still logged in (%s)", res.Detail)
+			continue
+		}
+		a.log.Warn("Periodic login check: %s", res.Detail)
+		a.notifyLoginFailure(cfg, res.Detail)
+	}
+}
+
+// notifyLoginFailure sends a Pushover alert when the periodic login check
+// finds the site_cookie no longer works, at most once per UTC day.
+func (a *App) notifyLoginFailure(cfg Config, detail string) {
+	if !cfg.PushoverEnabled {
+		return
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if v, ok := a.store.db.GetSetting(loginAlertDateKey); ok && v == today {
+		return
+	}
+	if pushErr := SendPushover(cfg, "F95Zone Release Monitor: login check failed", detail, cfg.PublicBaseURL); pushErr != "" {
+		a.log.Warn("Pushover login-failure alert could not be sent: %s", pushErr)
+		return
+	}
+	a.store.db.SetSetting(loginAlertDateKey, today)
+	a.log.Info("Pushover login-failure alert sent (further login alerts are suppressed until tomorrow)")
+}
 
 // notifyFailure sends a Pushover alert for a pipeline/backfill/auth failure,
 // but at most once per UTC day, so a scheduler that keeps retrying every few

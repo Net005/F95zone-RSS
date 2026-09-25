@@ -286,21 +286,30 @@ function tileHTML(x) {
 // over it, reverting to the static cover on mouse-leave. Images for a tile
 // are only fetched the first time it's actually hovered (not eagerly for the
 // whole grid), and cached per-link for the rest of the session. ──
-let hoverCfg = { enabled: true, delay: 900 };
+let hoverCfg = { enabled: true, delay: 900, startDelay: 400 };
 const hoverImgCache = new Map(); // link -> [urls] | Promise
-let hoverState = null; // { link, el, cover, timer }
+let hoverState = null; // { link, el, cover, timer } - slideshow actually running
+let hoverPending = null; // { el, timer } - waiting out startDelay before it begins
 
 function stopHoverSlideshow() {
+  if (hoverPending) { clearTimeout(hoverPending.timer); hoverPending = null; }
   if (!hoverState) return;
   clearInterval(hoverState.timer);
   hoverState.el.style.backgroundImage = hoverState.cover ? `url('${hoverState.cover}')` : '';
   hoverState = null;
 }
 
-async function startHoverSlideshow(link, el, cover) {
+// Waits hoverCfg.startDelay before actually starting the slideshow, so
+// dragging the mouse across the grid on the way to something else doesn't
+// fire off an image fetch and swap the cover for nothing.
+function startHoverSlideshow(link, el, cover) {
   if (!hoverCfg.enabled) return;
-  if (hoverState && hoverState.el === el) return;
+  if ((hoverState && hoverState.el === el) || (hoverPending && hoverPending.el === el)) return;
   stopHoverSlideshow();
+  hoverPending = { el, timer: setTimeout(() => { hoverPending = null; beginHoverSlideshow(link, el, cover); }, hoverCfg.startDelay) };
+}
+
+async function beginHoverSlideshow(link, el, cover) {
   hoverState = { link, el, cover, timer: 0 };
   let imgs = hoverImgCache.get(link);
   if (!imgs) {
@@ -410,7 +419,7 @@ $('#relGrid').addEventListener('mouseout', e => {
 // in the hero strip above). Prefers the dedicated Overview field; falls back
 // to the general description for rows enriched before that field existed.
 function overviewHTML(r) {
-  if (r.overview) return `<p>${esc(r.overview)}</p>`;
+  if (r.overview) return r.overview.split(/\n{2,}/).map(p => `<p>${esc(p)}</p>`).join('');
   if (r.extra_description) return r.extra_description;
   return '<span class="muted">No description available.</span>';
 }
@@ -613,7 +622,7 @@ $('#pwForm').onsubmit = async e => {
 };
 
 async function loadHoverCfg() {
-  try { const c = await api('/api/config'); hoverCfg = { enabled: !!c.hover_slideshow_enabled, delay: c.hover_slideshow_delay_ms || 900 }; } catch {}
+  try { const c = await api('/api/config'); hoverCfg = { enabled: !!c.hover_slideshow_enabled, delay: c.hover_slideshow_delay_ms || 900, startDelay: c.hover_slideshow_start_delay_ms ?? 400 }; } catch {}
 }
 
 // ── boot ──

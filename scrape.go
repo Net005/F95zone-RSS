@@ -425,7 +425,7 @@ func extractOverview(inner string) string {
 	if i := strings.Index(rest[:end], "<br/><br/>"); i != -1 && i < end {
 		end = i
 	}
-	txt := stripGated(stripHTML(rest[:end]))
+	txt := stripGated(stripHTMLParagraphs(rest[:end]))
 	if len([]rune(txt)) < 5 {
 		return ""
 	}
@@ -494,6 +494,44 @@ func stripHTML(s string) string {
 	s = html.UnescapeString(s)
 	s = strings.ReplaceAll(s, "​", "")
 	return strings.TrimSpace(wsRe.ReplaceAllString(s, " "))
+}
+
+var brOrBlockCloseRe = regexp.MustCompile(`(?i)<br\s*/?>|</p>|</div>|</li>`)
+
+// stripHTMLParagraphs is stripHTML's multi-paragraph cousin, for fields like
+// Overview where the source is several <p>/<br><br>-separated paragraphs.
+// Plain stripHTML replaces every tag (including the paragraph boundaries
+// themselves) with a single space, flattening everything into one run-on
+// line - fine for a single-line field like Genre, but it's what made the
+// Overview box render as a wall of text with no breaks at all. This turns
+// <br>/</p>/</div>/</li> into a paragraph break FIRST, strips whatever tags
+// are left, then re-collapses only the whitespace within each paragraph
+// (never across a break), and joins paragraphs back with a blank line.
+func stripHTMLParagraphs(s string) string {
+	s = brOrBlockCloseRe.ReplaceAllString(s, "\n\n")
+	s = tagStripRe.ReplaceAllString(s, "")
+	s = html.UnescapeString(s)
+	s = strings.ReplaceAll(s, "​", "")
+	var paras []string
+	var cur []string
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		if p := strings.TrimSpace(wsRe.ReplaceAllString(strings.Join(cur, " "), " ")); p != "" {
+			paras = append(paras, p)
+		}
+		cur = nil
+	}
+	for _, ln := range strings.Split(s, "\n") {
+		if t := strings.TrimSpace(ln); t == "" {
+			flush()
+		} else {
+			cur = append(cur, t)
+		}
+	}
+	flush()
+	return strings.Join(paras, "\n\n")
 }
 
 func extractDescription(inner, fullText string) (string, bool) {
@@ -802,13 +840,26 @@ func (a *App) harvestListingPage(ctx context.Context, bf *browserFetcher, pageUR
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
 	var found []harvestedLink
+	var bodyText string
 	err := chromedp.Run(tctx,
 		chromedp.Navigate(pageURL),
 		chromedp.Sleep(4*time.Second),
 		chromedp.Evaluate(harvestJS, &found),
+		chromedp.Text("body", &bodyText, chromedp.ByQuery, chromedp.NodeVisible),
 	)
 	if err != nil {
 		return nil, err
+	}
+	// The listing itself gates on being logged in - F95zone serves a plain
+	// "Sorry, you have to be logged in to access this page" response (still
+	// HTTP 200) instead of the Angular shell when site_cookie is missing,
+	// expired, or otherwise not accepted, so the Angular app never boots and
+	// the page genuinely has zero /threads/ links on it. Without this check
+	// that silently looks identical to "the listing really is empty", which
+	// it almost never actually is - surface it as a clear, actionable error
+	// instead of a confusing "0 thread link(s) found" on every single page.
+	if len(found) == 0 && strings.Contains(strings.ToLower(bodyText), "have to be logged in") {
+		return nil, errors.New(`listing page requires a logged-in session ("you have to be logged in") - the site_cookie in Settings is missing, expired, or not being accepted; use "Check F95zone login" in Settings to verify it`)
 	}
 	var out []Release
 	for _, h := range found {

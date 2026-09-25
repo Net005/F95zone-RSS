@@ -75,6 +75,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go app.RunScheduler(ctx)
+	go app.RunLoginCheckScheduler(ctx)
 
 	hs := &http.Server{Addr: fmt.Sprintf(":%d", *port), Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

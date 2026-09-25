@@ -44,7 +44,7 @@ func normalizeSiteCookie(raw string) string {
 }
 
 const (
-	appVersion       = "6.5.0"
+	appVersion       = "6.5.1"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
@@ -62,7 +62,9 @@ const (
 	// v4 (6.5.0): the site_cookie comma-vs-semicolon bug (fixed in normalizeSiteCookie) meant a
 	// lot of existing rows were enriched as a logged-out guest even with a cookie configured, so
 	// this bump forces one more re-scrape pass to pick up Genre/tags/Overview now that login works.
-	parserVersion = 4
+	// v5 (6.5.1): Overview now keeps its paragraph breaks (stripHTMLParagraphs) instead of being
+	// flattened into one run-on line - bumped so existing rows get reformatted, not just new ones.
+	parserVersion = 5
 )
 
 // Config mirrors the original settings.json keys and adds a few new ones.
@@ -78,6 +80,10 @@ type Config struct {
 	// BackfillURLTemplate) a normal scheduled/manual run walks to discover both new and
 	// already-known threads (existing threads are re-checked for a version bump, not skipped).
 	ScheduledPages   int     `json:"scheduled_pages"`
+	// LoginCheckHours: how often a background check re-probes CheckF95Login independently of
+	// the scrape schedule, so a cookie that quietly expired is caught (and Pushover-alerted)
+	// even during a stretch with nothing new to enrich. 0 disables the periodic check.
+	LoginCheckHours  int     `json:"login_check_hours"`
 	MaxImages        int     `json:"max_images_per_release"`
 	RateLimitMS      int     `json:"rate_limit_ms"`
 	CacheTTLHours    float64 `json:"cache_ttl_hours"`
@@ -114,6 +120,11 @@ type Config struct {
 	// and per-image delay like any other setting.
 	HoverSlideshowEnabled bool `json:"hover_slideshow_enabled"`
 	HoverSlideshowDelayMS int  `json:"hover_slideshow_delay_ms"`
+	// HoverSlideshowStartDelayMS: how long the mouse has to stay over a tile before the
+	// slideshow takes over from the static cover - distinct from HoverSlideshowDelayMS, which
+	// is the interval BETWEEN frames once it's running. Without this, just passing the mouse
+	// over a tile on the way to something else starts fetching/cycling images for nothing.
+	HoverSlideshowStartDelayMS int `json:"hover_slideshow_start_delay_ms"`
 }
 
 func defaultConfig() Config {
@@ -121,6 +132,7 @@ func defaultConfig() Config {
 		ScheduleHours:         12,
 		RSSSource:             defaultRSSSource,
 		ScheduledPages:        3,
+		LoginCheckHours:       6,
 		MaxImages:             8,
 		RateLimitMS:           800,
 		CacheTTLHours:         2,
@@ -133,8 +145,9 @@ func defaultConfig() Config {
 		BackfillURLTemplate:   defaultBackfillTemplate,
 		NotifyNew:             true,
 		NotifyUpdate:          true,
-		HoverSlideshowEnabled: true,
-		HoverSlideshowDelayMS: 900,
+		HoverSlideshowEnabled:      true,
+		HoverSlideshowDelayMS:      900,
+		HoverSlideshowStartDelayMS: 400,
 	}
 }
 
@@ -146,6 +159,9 @@ func (c *Config) Validate() error {
 	}
 	if c.ScheduledPages < 1 || c.ScheduledPages > 50 {
 		return errors.New("scheduled_pages must be between 1 and 50")
+	}
+	if c.LoginCheckHours < 0 || c.LoginCheckHours > 24 {
+		return errors.New("login_check_hours must be between 0 (disabled) and 24")
 	}
 	if u, err := url.Parse(c.RSSSource); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return errors.New("rss_source must be a valid http(s) URL")
@@ -182,6 +198,9 @@ func (c *Config) Validate() error {
 	}
 	if c.HoverSlideshowDelayMS < 100 || c.HoverSlideshowDelayMS > 10000 {
 		return errors.New("hover_slideshow_delay_ms must be between 100 and 10000")
+	}
+	if c.HoverSlideshowStartDelayMS < 0 || c.HoverSlideshowStartDelayMS > 5000 {
+		return errors.New("hover_slideshow_start_delay_ms must be between 0 and 5000")
 	}
 	if c.PushoverEnabled && (strings.TrimSpace(c.PushoverUserKey) == "" || strings.TrimSpace(c.PushoverAPIToken) == "") {
 		return errors.New("pushover_user_key and pushover_api_token are required when Pushover is enabled")
