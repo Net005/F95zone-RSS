@@ -471,7 +471,7 @@ func (s *Server) notifClear(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pushoverTest(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.cfg.Get()
-	if errStr := SendPushover(cfg, "F95Zone RSS Control", "Test notification - Pushover is working.", cfg.PublicBaseURL); errStr != "" {
+	if errStr := SendPushover(cfg, "F95Zone Release Monitor", "Test notification - Pushover is working.", cfg.PublicBaseURL); errStr != "" {
 		writeErr(w, 400, fmt.Errorf("%s", errStr))
 		return
 	}
