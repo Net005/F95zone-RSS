@@ -38,6 +38,14 @@ type Release struct {
 	FirstSeen         string   `json:"first_seen,omitempty"`
 	LastSeen          string   `json:"last_seen,omitempty"`
 	DiscoveredVia     string   `json:"discovered_via,omitempty"`
+	Watched           bool     `json:"watched"`
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func jsonArr(v []string) string {
@@ -62,22 +70,24 @@ func scanRelease(row interface {
 }) (Release, error) {
 	var r Release
 	var labels, imgs string
+	var watched int
 	err := row.Scan(&r.Link, &r.Title, &r.PubDateRaw, &r.PubDateISO, &r.SourceDescription, &r.ExtraDescription,
 		&labels, &r.Engine, &r.Version, &imgs, &r.HeaderImage, &r.ThreadUpdated, &r.ReleaseDate, &r.Developer,
 		&r.Censored, &r.OS, &r.Language, &r.Store, &r.EnrichedAt, &r.EnrichError, &r.ParserVer,
-		&r.FirstSeen, &r.LastSeen, &r.DiscoveredVia)
+		&r.FirstSeen, &r.LastSeen, &r.DiscoveredVia, &watched)
 	if err != nil {
 		return r, err
 	}
 	// Tags come from the release_tags join table, filled in by the caller.
 	r.Labels = parseArr(labels)
 	r.ImageURLs = parseArr(imgs)
+	r.Watched = watched == 1
 	return r, nil
 }
 
 const releaseCols = `link, title, pub_date_raw, pub_date_iso, source_description, extra_description,
 	labels_json, engine, version, image_urls_json, header_image, thread_updated, release_date, developer,
-	censored, os, language, store, enriched_at, enrich_error, parser_ver, first_seen, last_seen, discovered_via`
+	censored, os, language, store, enriched_at, enrich_error, parser_ver, first_seen, last_seen, discovered_via, watched`
 
 func (d *DB) tagsFor(link string) []string {
 	rows, err := d.sql.Query(`SELECT tag FROM release_tags WHERE link=? ORDER BY tag`, link)
@@ -124,7 +134,10 @@ func (d *DB) UpsertRelease(r Release, discoveredVia string) error {
 		discoveredVia = "feed"
 	}
 
-	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	// watched is intentionally left out of the UPDATE SET clause below: a
+	// human's "monitor this release" toggle must survive every re-scrape.
+	// The bound value here only ever applies to a genuinely new row.
+	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(link) DO UPDATE SET
 			title=excluded.title, pub_date_raw=excluded.pub_date_raw, pub_date_iso=excluded.pub_date_iso,
 			source_description=excluded.source_description, extra_description=excluded.extra_description,
@@ -137,7 +150,7 @@ func (d *DB) UpsertRelease(r Release, discoveredVia string) error {
 		r.Link, r.Title, r.PubDateRaw, r.PubDateISO, r.SourceDescription, r.ExtraDescription,
 		jsonArr(r.Labels), r.Engine, r.Version, jsonArr(r.ImageURLs), r.HeaderImage, r.ThreadUpdated, r.ReleaseDate,
 		r.Developer, r.Censored, r.OS, r.Language, r.Store, r.EnrichedAt, r.EnrichError, r.ParserVer,
-		firstSeen, now, discoveredVia)
+		firstSeen, now, discoveredVia, boolToInt(r.Watched))
 	if err != nil {
 		return err
 	}
@@ -167,13 +180,35 @@ func dedupTags(in []string) []string {
 }
 
 type ReleaseFilter struct {
-	Query    string
-	Tags     []string // AND match
-	Engine   string
-	Failed   bool
-	Sort     string // newest, oldest, title
-	Page     int
-	PageSize int
+	Query       string
+	Tags        []string // AND match
+	Engine      string
+	Failed      bool
+	WatchedOnly bool
+	Sort        string // newest, oldest, title
+	Page        int
+	PageSize    int
+}
+
+// SetWatched flags (or unflags) a release for "monitor this release"
+// notifications. Returns sql.ErrNoRows if the link isn't in the database.
+func (d *DB) SetWatched(link string, watched bool) error {
+	res, err := d.sql.Exec(`UPDATE releases SET watched=? WHERE link=?`, boolToInt(watched), link)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// MostRecentEnrichedLink returns the most recently enriched release, used as
+// a live probe thread when checking whether the configured site cookie is
+// still a valid logged-in session.
+func (d *DB) MostRecentEnrichedLink() (link, title string, ok bool) {
+	err := d.sql.QueryRow(`SELECT link, title FROM releases WHERE enriched_at<>'' ORDER BY enriched_at DESC LIMIT 1`).Scan(&link, &title)
+	return link, title, err == nil
 }
 
 type ReleasePage struct {
@@ -196,6 +231,9 @@ func (d *DB) QueryReleases(f ReleaseFilter) (ReleasePage, error) {
 	}
 	if f.Failed {
 		where = append(where, "enrich_error <> ''")
+	}
+	if f.WatchedOnly {
+		where = append(where, "watched = 1")
 	}
 	tagFilter := ""
 	if len(f.Tags) > 0 {

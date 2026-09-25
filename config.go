@@ -52,6 +52,10 @@ type Config struct {
 
 	BackfillURLTemplate string `json:"backfill_url_template"`
 
+	// NotifyNew is kept only so older settings.json/database values still decode;
+	// notifications are gated on a release's "watched" flag now (see checkAndNotify
+	// in pipeline.go), and a release can't be watched before it's been seen once,
+	// so a "new release" notification can no longer fire.
 	NotifyNew    bool `json:"notify_new"`
 	NotifyUpdate bool `json:"notify_update"`
 

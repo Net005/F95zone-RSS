@@ -164,14 +164,14 @@ $('#logClear').onclick = () => { if (confirm('Clear the log file and buffer?')) 
 
 // ── releases: filters, saved filter sets (persisted in localStorage) ──
 const LS_FILTER = 'f95_current_filter', LS_SETS = 'f95_filter_sets';
-let relState = { q: '', tags: [], engine: '', sort: 'newest', failed: false, page: 1 };
+let relState = { q: '', tags: [], engine: '', sort: 'newest', failed: false, watched: false, page: 1 };
 let allTags = [];
 
 function loadPersistedFilter() {
   try { const v = JSON.parse(localStorage.getItem(LS_FILTER) || 'null'); if (v) relState = { ...relState, ...v, page: 1 }; } catch {}
 }
 function persistFilter() {
-  try { localStorage.setItem(LS_FILTER, JSON.stringify({ q: relState.q, tags: relState.tags, engine: relState.engine, sort: relState.sort, failed: relState.failed })); } catch {}
+  try { localStorage.setItem(LS_FILTER, JSON.stringify({ q: relState.q, tags: relState.tags, engine: relState.engine, sort: relState.sort, failed: relState.failed, watched: relState.watched })); } catch {}
 }
 function getFilterSets() { try { return JSON.parse(localStorage.getItem(LS_SETS) || '[]'); } catch { return []; } }
 function saveFilterSets(v) { try { localStorage.setItem(LS_SETS, JSON.stringify(v)); } catch {} }
@@ -183,21 +183,21 @@ function renderFilterSets() {
 $('#saveFilterBtn').onclick = () => {
   const name = prompt('Name this filter set:'); if (!name) return;
   const sets = getFilterSets().filter(s => s.name !== name);
-  sets.push({ name, q: relState.q, tags: relState.tags, engine: relState.engine, sort: relState.sort, failed: relState.failed });
+  sets.push({ name, q: relState.q, tags: relState.tags, engine: relState.engine, sort: relState.sort, failed: relState.failed, watched: relState.watched });
   saveFilterSets(sets); renderFilterSets(); toast('Filter saved');
 };
 $('#filterSets').onchange = e => {
   if (e.target.value === '') return;
   const s = getFilterSets()[Number(e.target.value)]; if (!s) return;
-  relState = { ...relState, q: s.q, tags: s.tags, engine: s.engine, sort: s.sort, failed: s.failed, page: 1 };
+  relState = { ...relState, q: s.q, tags: s.tags, engine: s.engine, sort: s.sort, failed: s.failed, watched: !!s.watched, page: 1 };
   applyFilterToControls(); persistFilter(); queryReleases();
 };
 $('#clearFilterBtn').onclick = () => {
-  relState = { q: '', tags: [], engine: '', sort: 'newest', failed: false, page: 1 };
+  relState = { q: '', tags: [], engine: '', sort: 'newest', failed: false, watched: false, page: 1 };
   applyFilterToControls(); persistFilter(); queryReleases();
 };
 function applyFilterToControls() {
-  $('#relSearch').value = relState.q; $('#relEngine').value = relState.engine; $('#relSort').value = relState.sort; $('#relFailed').checked = relState.failed;
+  $('#relSearch').value = relState.q; $('#relEngine').value = relState.engine; $('#relSort').value = relState.sort; $('#relFailed').checked = relState.failed; $('#relWatched').checked = relState.watched;
   renderChips();
 }
 
@@ -256,11 +256,20 @@ function tileHTML(x) {
   return `
     <div class="tile" data-link="${esc(x.link)}">
       <div class="cv" style="${x.cover ? `background-image:url('${esc(x.cover)}')` : ''}">
+        <button type="button" class="watch${x.watched ? ' on' : ''}" data-watch="${esc(x.link)}" title="${x.watched ? 'Stop monitoring' : 'Monitor for updates'}">${x.watched ? '★' : '☆'}</button>
         ${x.error ? '<span class="bad">FAILED</span>' : ''}${x.images ? `<span class="n">${x.images} img</span>` : ''}
       </div>
       <div class="tb"><div class="tt">${esc(x.title.replace(/^(\[[^\]]*\]\s*)+/, '') || x.title)}</div>
       <div class="tm">${x.labels.map(labelHTML).join('')}${engineHTML(x.engine)}${versionHTML(x.version)}<div>${ago(x.pub)}</div></div></div>
     </div>`;
+}
+
+async function toggleWatch(link, on, btn) {
+  try {
+    await api('/api/releases/watch', { method: 'POST', body: { link, watched: on } });
+    if (btn) { btn.classList.toggle('on', on); btn.textContent = on ? '★' : '☆'; btn.title = on ? 'Stop monitoring' : 'Monitor for updates'; }
+    toast(on ? 'Monitoring release' : 'No longer monitoring');
+  } catch (e) { toast(e.message, true); }
 }
 
 function updateScrollEnd(page, pages, loading) {
@@ -274,7 +283,7 @@ function updateScrollEnd(page, pages, loading) {
 async function fetchReleasesPage(page) {
   const p = new URLSearchParams({
     q: relState.q, tags: relState.tags.join(','), engine: relState.engine, sort: relState.sort,
-    failed: relState.failed ? '1' : '0', page, page_size: 60,
+    failed: relState.failed ? '1' : '0', watched: relState.watched ? '1' : '0', page, page_size: 60,
   });
   return api('/api/releases?' + p);
 }
@@ -322,44 +331,81 @@ function setupScrollObserver() {
 $('#relLoadMore').onclick = () => loadMoreReleases();
 
 $('#relSearch').oninput = () => { clearTimeout(relTimer); relTimer = setTimeout(() => { relState.q = $('#relSearch').value; persistFilter(); queryReleases(); }, 250); };
-['relEngine', 'relSort', 'relFailed'].forEach(id => $('#' + id).onchange = () => {
-  relState.engine = $('#relEngine').value; relState.sort = $('#relSort').value; relState.failed = $('#relFailed').checked;
+['relEngine', 'relSort', 'relFailed', 'relWatched'].forEach(id => $('#' + id).onchange = () => {
+  relState.engine = $('#relEngine').value; relState.sort = $('#relSort').value; relState.failed = $('#relFailed').checked; relState.watched = $('#relWatched').checked;
   persistFilter(); queryReleases();
 });
-$('#relGrid').onclick = e => { const t = e.target.closest('.tile'); if (t) openRelease(t.dataset.link); };
+$('#relGrid').onclick = e => {
+  const w = e.target.closest('[data-watch]');
+  if (w) { e.stopPropagation(); toggleWatch(w.dataset.watch, !w.classList.contains('on'), w); return; }
+  const t = e.target.closest('.tile'); if (t) openRelease(t.dataset.link);
+};
 
 function detailHTML(r, d) {
+  const hero = d.cover;
+  const info = [
+    ['Developer', r.developer], ['Engine', r.engine], ['Version', r.version],
+    ['Published', clock(r.pub_date_iso)], ['Thread updated', r.thread_updated],
+    ['Enriched', r.enriched_at ? clock(r.enriched_at) : ''], ['OS', r.os], ['Language', r.language],
+    ['Censored', r.censored], ['Store', r.store],
+  ].filter(([, v]) => v);
   return `
-    <div class="btnrow" style="margin:0 0 10px"><a class="btn primary" href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">Open thread</a>
-      <button class="btn" id="mReenrich">Re-scrape this thread</button></div>
-    <div class="kv">
-      <span class="k">Published</span><span class="v">${clock(r.pub_date_iso)}</span>
-      <span class="k">Enriched</span><span class="v">${r.enriched_at ? clock(r.enriched_at) : 'unknown'}</span>
-      <span class="k">Engine</span><span class="v">${esc(r.engine) || '-'}</span>
-      <span class="k">Version</span><span class="v">${esc(r.version) || '-'}</span>
-      ${r.developer ? `<span class="k">Developer</span><span class="v">${esc(r.developer)}</span>` : ''}
-      ${r.thread_updated ? `<span class="k">Thread updated</span><span class="v">${esc(r.thread_updated)}</span>` : ''}
-      <span class="k">Description</span><span class="v">${r.extra_description.length} chars</span>
-      <span class="k">Images</span><span class="v">${d.images.length}</span>
+    <div class="rel-hero" style="${hero ? `background-image:url('${esc(hero)}')` : ''}">
+      <div class="rh-in">
+        <div class="rh-title">${esc(r.title.replace(/^(\[[^\]]*\]\s*)+/, '') || r.title)}</div>
+        <div class="rh-sub">${r.labels.map(labelHTML).join('')}${engineHTML(r.engine)}${versionHTML(r.version)}</div>
+      </div>
     </div>
-    ${r.enrich_error ? `<div class="banner" style="margin-top:12px">Last enrichment error: ${esc(r.enrich_error)}</div>` : ''}
-    <div style="margin-top:10px">${r.labels.map(labelHTML).join('')}${engineHTML(r.engine)}</div>
-    ${r.tags && r.tags.length ? `<div style="margin-top:8px">${r.tags.map(tagChipHTML).join('')}</div>` : ''}
-    <h4>Feed rendering</h4><iframe class="pv" sandbox="" id="mFrame"></iframe>
-    ${d.images.length ? `<h4>Images</h4><div class="shots">${d.images.map(u => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}">`).join('')}</div>` : ''}`;
+    <div class="btnrow" style="margin:0 0 14px">
+      <a class="btn primary" href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">Open thread</a>
+      <button class="btn" id="mReenrich">Re-scrape this thread</button>
+      <button type="button" class="watch-btn${r.watched ? ' on' : ''}" id="mWatch" data-link="${esc(r.link)}"><span class="watch-star">${r.watched ? '★' : '☆'}</span><span id="mWatchLabel">${r.watched ? 'Monitoring' : 'Monitor for updates'}</span></button>
+    </div>
+    ${r.enrich_error ? `<div class="banner">Last enrichment error: ${esc(r.enrich_error)}</div>` : ''}
+    <div class="rel-layout">
+      <div>
+        <h4>Overview</h4>
+        <div class="rel-desc">${d.feed_html ? '<iframe class="pv" sandbox="" id="mFrame"></iframe>' : '<span class="muted">No description available.</span>'}</div>
+        ${d.images.length ? `<h4>Screenshots</h4><div class="shots">${d.images.map(u => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}">`).join('')}</div>` : ''}
+      </div>
+      <div>
+        <h4>Info</h4>
+        <dl class="rel-info">${info.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
+        ${r.tags && r.tags.length ? `<h4>Tags</h4><div>${r.tags.map(tagChipHTML).join('')}</div>` : ''}
+      </div>
+    </div>`;
 }
 
 async function openRelease(link) {
   const d = await api('/api/release?link=' + encodeURIComponent(link)).catch(e => toast(e.message, true)); if (!d) return;
   const r = d.release;
   $('#mTitle').textContent = r.title;
-  const doc = `<!doctype html><meta charset=utf-8><base target=_blank><body style="margin:12px;background:#111;color:#ddd;font:14px/1.5 sans-serif">${d.feed_html}`;
+  $('#modalBox').classList.add('wide');
   $('#mBody').innerHTML = detailHTML(r, d);
-  $('#mFrame').srcdoc = doc;
+  const frame = $('#mFrame');
+  if (frame) {
+    const doc = `<!doctype html><meta charset=utf-8><base target=_blank>` +
+      `<style>body{margin:0;background:transparent;color:#ddd;font:14px/1.6 "Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}img{max-width:100%}</style>` +
+      `<body onload="parent.postMessage({f95FrameHeight:document.body.scrollHeight},'*')">${d.feed_html}`;
+    frame.srcdoc = doc;
+  }
   $('#mReenrich').onclick = async () => { const ok = await act(() => api('/api/reenrich', { method: 'POST', body: { link } }), 'Re-scrape started'); if (ok) closeModal(); };
+  $('#mWatch').onclick = () => toggleWatchModal(link, !r.watched);
   $('#modal').hidden = false;
 }
-const closeModal = () => { $('#modal').hidden = true; $('#mBody').innerHTML = ''; };
+window.addEventListener('message', e => {
+  if (e.data && typeof e.data.f95FrameHeight === 'number') { const f = $('#mFrame'); if (f) f.style.height = Math.max(40, e.data.f95FrameHeight + 8) + 'px'; }
+});
+function toggleWatchModal(link, on) {
+  toggleWatch(link, on).then(() => {
+    const btn = $('#mWatch'); if (!btn) return;
+    btn.classList.toggle('on', on);
+    $('.watch-star', btn).textContent = on ? '★' : '☆';
+    $('#mWatchLabel').textContent = on ? 'Monitoring' : 'Monitor for updates';
+    const grid = $(`[data-watch="${CSS.escape(link)}"]`); if (grid) { grid.classList.toggle('on', on); grid.textContent = on ? '★' : '☆'; }
+  });
+}
+const closeModal = () => { $('#modal').hidden = true; $('#mBody').innerHTML = ''; $('#modalBox').classList.remove('wide'); };
 $('#mClose').onclick = closeModal;
 $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
 
@@ -444,6 +490,19 @@ $('#btnPushoverTest').onclick = async () => {
   const m = $('#pushMsg');
   try { await api('/api/pushover/test', { method: 'POST' }); m.textContent = 'Sent - check your device.'; m.style.color = 'var(--ok)'; }
   catch (err) { m.textContent = err.message; m.style.color = 'var(--err)'; }
+};
+$('#btnCheckLogin').onclick = async () => {
+  const box = $('#loginCheckResult'); const btn = $('#btnCheckLogin');
+  btn.disabled = true; box.innerHTML = '<div class="banner">Checking&hellip;</div>';
+  try {
+    const r = await api('/api/f95/check-login', { method: 'POST' });
+    const cls = r.logged_in ? 'ok' : (r.cookie_set ? 'warn' : '');
+    box.innerHTML = `<div class="banner ${cls}"><b>${r.logged_in ? 'Logged in' : r.cookie_set ? 'Cookie set but not confirmed logged in' : 'No cookie configured'}</b>` +
+      (r.checked_title ? ` &middot; probed <i>${esc(r.checked_title)}</i>` : '') +
+      (r.detail ? `<div class="small" style="margin-top:4px">${esc(r.detail)}</div>` : '') + `</div>`;
+  } catch (err) {
+    box.innerHTML = `<div class="banner">${esc(err.message)}</div>`;
+  } finally { btn.disabled = false; }
 };
 
 // ── account ──

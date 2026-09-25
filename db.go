@@ -76,7 +76,42 @@ func OpenDB(path string) (*DB, error) {
 			return nil, err
 		}
 	}
-	return &DB{d}, nil
+	db := &DB{d}
+	if err := db.migrateWatchedColumn(); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+// migrateWatchedColumn adds releases.watched to databases created before the
+// "monitor this release" feature existed. SQLite has no ADD COLUMN IF NOT
+// EXISTS, so the existing schema is checked first.
+func (d *DB) migrateWatchedColumn() error {
+	rows, err := d.sql.Query(`PRAGMA table_info(releases)`)
+	if err != nil {
+		return err
+	}
+	has := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "watched" {
+			has = true
+		}
+	}
+	rows.Close()
+	if !has {
+		if _, err := d.sql.Exec(`ALTER TABLE releases ADD COLUMN watched INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	_, err = d.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_releases_watched ON releases(watched)`)
+	return err
 }
 
 func (d *DB) GetSetting(key string) (string, bool) {

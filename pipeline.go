@@ -315,25 +315,22 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 
 // checkAndNotify compares a freshly processed release against what was stored
 // before this run and files a notification (and optionally a Pushover push)
-// when it's genuinely new or its version changed.
+// when its version changed - but only for a release the user has explicitly
+// flagged "monitor" in the Releases panel. A release can't be pre-flagged
+// before it's ever been seen once, so a title's very first appearance in the
+// feed is always silent by design: notifications are opt-in per game, not a
+// firehose of everything the source feed happens to carry.
 func (a *App) checkAndNotify(cfg Config, hadExisting bool, existing, fresh Release, rec *RunRecord) {
-	kind := ""
-	oldVersion := ""
-	switch {
-	case !hadExisting && cfg.NotifyNew:
-		kind = "new"
-	case hadExisting && cfg.NotifyUpdate && existing.Version != "" && fresh.Version != "" && existing.Version != fresh.Version:
-		kind = "update"
-		oldVersion = existing.Version
-	default:
+	if !hadExisting || !existing.Watched || !cfg.NotifyUpdate {
 		return
 	}
+	if existing.Version == "" || fresh.Version == "" || existing.Version == fresh.Version {
+		return
+	}
+	kind := "update"
+	oldVersion := existing.Version
 	if rec != nil {
-		if kind == "new" {
-			rec.New++
-		} else {
-			rec.Updated++
-		}
+		rec.Updated++
 	}
 	cover := fresh.HeaderImage
 	if cover == "" && len(fresh.ImageURLs) > 0 {

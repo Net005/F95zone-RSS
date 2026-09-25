@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -48,6 +49,8 @@ func (s *Server) Handler() http.Handler {
 	api("GET /api/release", s.releaseDetail)
 	api("GET /api/tags", s.tags)
 	api("GET /api/engines", s.engines)
+	api("POST /api/releases/watch", s.setWatched)
+	api("POST /api/f95/check-login", s.checkLogin)
 	api("GET /api/history", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.app.store.History()) })
 	api("GET /api/config", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, s.app.cfg.Get()) })
 	api("PUT /api/config", s.putConfig)
@@ -212,6 +215,7 @@ type relSummary struct {
 	DescLen    int      `json:"desc_len"`
 	Error      string   `json:"error,omitempty"`
 	EnrichedAt string   `json:"enriched_at,omitempty"`
+	Watched    bool     `json:"watched"`
 }
 
 func splitCSV(s string) []string {
@@ -233,7 +237,7 @@ func (s *Server) releases(w http.ResponseWriter, r *http.Request) {
 	pageSize, _ := strconv.Atoi(q.Get("page_size"))
 	f := ReleaseFilter{
 		Query: strings.TrimSpace(q.Get("q")), Tags: splitCSV(q.Get("tags")), Engine: q.Get("engine"),
-		Failed: q.Get("failed") == "1", Sort: q.Get("sort"), Page: page, PageSize: pageSize,
+		Failed: q.Get("failed") == "1", WatchedOnly: q.Get("watched") == "1", Sort: q.Get("sort"), Page: page, PageSize: pageSize,
 	}
 	res, err := s.app.store.db.QueryReleases(f)
 	if err != nil {
@@ -245,6 +249,7 @@ func (s *Server) releases(w http.ResponseWriter, r *http.Request) {
 		items[i] = relSummary{
 			Title: x.Title, Link: x.Link, Pub: x.PubDateISO, Labels: x.Labels, Tags: x.Tags, Engine: x.Engine, Version: x.Version,
 			Cover: s.coverURL(x), Images: len(x.ImageURLs), DescLen: len(x.ExtraDescription), Error: x.EnrichError, EnrichedAt: x.EnrichedAt,
+			Watched: x.Watched,
 		}
 	}
 	writeJSON(w, 200, map[string]any{"total": res.Total, "page": res.Page, "pages": res.Pages, "page_size": f.PageSize, "items": items})
@@ -293,6 +298,41 @@ func (s *Server) engines(w http.ResponseWriter, r *http.Request) {
 		out = []Count{}
 	}
 	writeJSON(w, 200, out)
+}
+
+func (s *Server) setWatched(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Link    string
+		Watched bool
+	}
+	readBody(r, &b)
+	if strings.TrimSpace(b.Link) == "" {
+		writeErr(w, 400, fmt.Errorf("link is required"))
+		return
+	}
+	if err := s.app.store.db.SetWatched(b.Link, b.Watched); err != nil {
+		writeErr(w, 404, fmt.Errorf("release not found"))
+		return
+	}
+	verb := "Stopped monitoring"
+	if b.Watched {
+		verb = "Monitoring"
+	}
+	s.app.log.Info("%s %s", verb, b.Link)
+	writeJSON(w, 200, map[string]any{"ok": true, "watched": b.Watched})
+}
+
+// checkLogin probes F95zone with the configured site_cookie and reports
+// whether it's actually a working, logged-in session (see CheckF95Login).
+func (s *Server) checkLogin(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	res, err := s.app.CheckF95Login(ctx)
+	if err != nil && res.Detail == "" {
+		writeErr(w, 502, err)
+		return
+	}
+	writeJSON(w, 200, res)
 }
 
 // ── actions ──

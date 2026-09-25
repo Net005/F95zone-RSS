@@ -673,3 +673,96 @@ func (a *App) harvestListingPage(ctx context.Context, bf *browserFetcher, pageUR
 	}
 	return out, nil
 }
+
+// ──────────────────────────────────────────────────────────────
+//  Login check: does the configured site_cookie actually get us a
+//  logged-in session, or are we still scraping gated placeholder text?
+// ──────────────────────────────────────────────────────────────
+
+// LoginCheck is the result of probing F95zone with the configured cookie.
+type LoginCheck struct {
+	CookieSet    bool   `json:"cookie_set"`
+	Checked      bool   `json:"checked"`
+	CheckedLink  string `json:"checked_link,omitempty"`
+	CheckedTitle string `json:"checked_title,omitempty"`
+	LoggedIn     bool   `json:"logged_in"`
+	SpoilersSeen int    `json:"spoilers_seen"`
+	Gated        bool   `json:"gated"`
+	Detail       string `json:"detail"`
+	CheckedAt    string `json:"checked_at"`
+}
+
+// CheckF95Login re-fetches a real thread - the most recently enriched
+// release, or the first item of the source RSS feed if the database is still
+// empty - with the configured site_cookie and checks whether its
+// spoiler-gated fields came back as real content or as the fixed "you don't
+// have permission to view the spoiler content" placeholder. That's the exact
+// signal enrichRelease itself depends on for full release info (Genre,
+// Developer, etc. are usually inside a spoiler block), so a clean pass here
+// means the cookie is a working, logged-in session.
+func (a *App) CheckF95Login(ctx context.Context) (LoginCheck, error) {
+	cfg := a.cfg.Get()
+	res := LoginCheck{CookieSet: strings.TrimSpace(cfg.SiteCookie) != "", CheckedAt: time.Now().UTC().Format(time.RFC3339)}
+	if !res.CookieSet {
+		res.Detail = "No site_cookie configured in Settings - enrichment runs as a logged-out guest, so gated fields (Genre, and some threads' whole description) will be blank."
+		return res, nil
+	}
+
+	link, title, err := a.pickProbeThread(ctx, cfg)
+	if err != nil {
+		res.Detail = fmt.Sprintf("Could not find a thread to test the cookie against: %v", err)
+		return res, err
+	}
+	res.CheckedLink, res.CheckedTitle = link, title
+
+	f := newHTTPFetcher(cfg)
+	defer f.Close()
+	rawHTML, err := f.Page(ctx, link)
+	if err != nil {
+		res.Detail = fmt.Sprintf("Thread fetch failed: %v", err)
+		return res, err
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(rawHTML))
+	if err != nil {
+		res.Detail = fmt.Sprintf("Could not parse the thread page: %v", err)
+		return res, err
+	}
+	post := findPost(doc)
+	if post == nil {
+		res.Detail = "Could not find the thread's first post on the page - its layout may not match what this scraper expects."
+		return res, errors.New("first post container not found")
+	}
+	res.SpoilersSeen = post.Find(".bbCodeSpoiler, .bbCodeBlock--spoiler").Length()
+	cleanPost(post)
+	res.Gated = gatedPlaceholderRe.MatchString(post.Text())
+	res.Checked = true
+
+	switch {
+	case res.SpoilersSeen == 0:
+		res.Detail = fmt.Sprintf("%q has no spoiler-gated fields to test against, so this isn't conclusive - try again once more threads are enriched.", title)
+	case res.Gated:
+		res.Detail = fmt.Sprintf("Spoiler content on %q is still gated (\"log in or register now\") - the cookie is missing, expired, or belongs to a logged-out session.", title)
+	default:
+		res.LoggedIn = true
+		res.Detail = fmt.Sprintf("Full content, including %d spoiler-gated field(s), came back from %q - the site cookie is working.", res.SpoilersSeen, title)
+	}
+	return res, nil
+}
+
+// pickProbeThread picks a real thread URL to test the cookie against: the
+// most recently enriched release already in the database, or - on a brand
+// new install with nothing scraped yet - the first item of the source RSS
+// feed (one lightweight extra request, no enrichment).
+func (a *App) pickProbeThread(ctx context.Context, cfg Config) (link, title string, err error) {
+	if l, t, ok := a.store.db.MostRecentEnrichedLink(); ok {
+		return l, t, nil
+	}
+	items, err := a.fetchSourceRSS(ctx, cfg)
+	if err != nil {
+		return "", "", err
+	}
+	if len(items) == 0 {
+		return "", "", errors.New("source RSS feed returned no items")
+	}
+	return items[0].Link, items[0].Title, nil
+}

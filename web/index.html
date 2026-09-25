@@ -88,6 +88,7 @@
       <option value="recent">Recently checked</option><option value="title">Title A-Z</option>
     </select>
     <label class="chk"><input type="checkbox" id="relFailed"> Failed only</label>
+    <label class="chk"><input type="checkbox" id="relWatched"> Monitored only</label>
   </div>
   <div class="toolbar tagbar">
     <div class="tagpicker">
@@ -220,10 +221,12 @@
         <label class="lbl">Site session cookie <small>(paste the Cookie header from a logged-in browser tab, e.g. xf_user=...; xf_session=...)</small>
           <textarea class="in" name="site_cookie" rows="2" placeholder="xf_user=...; xf_session=..."></textarea></label>
         <p class="muted small">Used for enrichment and backfill so the scraper sees what your account sees (spoilers/galleries some threads gate behind login). Never shared anywhere else.</p>
+        <div class="btnrow"><button class="btn" type="button" id="btnCheckLogin">Check F95zone login</button></div>
+        <div id="loginCheckResult"></div>
       </fieldset>
       <fieldset><legend>Notifications</legend>
-        <label class="chk"><input type="checkbox" name="notify_new"> Notify on new releases</label>
-        <label class="chk"><input type="checkbox" name="notify_update"> Notify on version changes</label>
+        <p class="muted small">Notifications only fire for releases you've marked "Monitor" on the Releases tab, when their version changes.</p>
+        <label class="chk"><input type="checkbox" name="notify_update"> Notify on version changes (monitored releases only)</label>
         <label class="chk"><input type="checkbox" name="pushover_enabled"> Send Pushover notifications</label>
         <div class="grid g3">
           <label class="lbl">Pushover user key<input class="in" name="pushover_user_key"></label>
@@ -253,7 +256,7 @@
 
 <!-- release / notification modal -->
 <div class="modal" id="modal" hidden>
-  <div class="modal-box">
+  <div class="modal-box" id="modalBox">
     <div class="modal-h"><span id="mTitle"></span><button class="x" id="mClose">&times;</button></div>
     <div class="modal-b" id="mBody"></div>
   </div>
