@@ -324,6 +324,109 @@ var (
 	wsRe            = regexp.MustCompile(`\s+`)
 )
 
+// parseThreadPrefixes reads the thread title's own prefix badges
+// (<h1 class="p-title-value"><a class="labelLink"><span class="label ...">TEXT</span></a> ...)
+// which is F95zone's own authoritative engine/status classification for the
+// thread - far more reliable than guessing the engine from title brackets.
+// Of the (usually two) prefixes, whichever text matches engineNames (case
+// insensitive) is the engine; the other, if any, is returned as a status label
+// (Completed, Abandoned, Onhold, VN, ...).
+func parseThreadPrefixes(doc *goquery.Document) (engine, label string) {
+	h1 := doc.Find("h1.p-title-value").First()
+	if h1.Length() == 0 {
+		return "", ""
+	}
+	h1.Find("a.labelLink span.label").Each(func(_ int, s *goquery.Selection) {
+		t := strings.TrimSpace(s.Text())
+		if t == "" {
+			return
+		}
+		if canon, ok := engineNames[strings.ToLower(t)]; ok {
+			if engine == "" {
+				engine = canon
+			}
+			return
+		}
+		if label == "" {
+			label = t
+		}
+	})
+	return
+}
+
+// mergeLabel adds label to labels if it isn't already present (case-insensitive).
+func mergeLabel(labels []string, label string) []string {
+	if label == "" {
+		return labels
+	}
+	for _, l := range labels {
+		if strings.EqualFold(l, label) {
+			return labels
+		}
+	}
+	return append(labels, label)
+}
+
+// mergeTags merges two tag slices, deduped case-insensitively, trimmed.
+func mergeTags(a, b []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, list := range [][]string{a, b} {
+		for _, t := range list {
+			t = strings.TrimSpace(t)
+			if t == "" || seen[strings.ToLower(t)] {
+				continue
+			}
+			seen[strings.ToLower(t)] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// parseHeaderTags reads the thread header's own tag list
+// (<dl class="tagList"><dd><span class="js-tagList"><a class="tagItem">tag</a>...)
+// which F95zone renders for every thread regardless of login state, unlike the
+// Genre line in the first post which may be gated or simply not present.
+func parseHeaderTags(doc *goquery.Document) []string {
+	var out []string
+	doc.Find(".js-tagList .tagItem, dl.tagList a.tagItem").Each(func(_ int, s *goquery.Selection) {
+		t := strings.TrimSpace(s.Text())
+		if t != "" {
+			out = append(out, t)
+		}
+	})
+	return out
+}
+
+// extractOverview pulls just the "Overview:" paragraph out of the cleaned post
+// HTML as its own field, separate from ExtraDescription (which may be a wider
+// fallback slice of the post when no explicit Overview label exists). The
+// value runs until the next "<b>Label</b>" metadata heading or a double <br>,
+// whichever comes first.
+func extractOverview(inner string) string {
+	m := overviewRe.FindStringIndex(inner)
+	if m == nil {
+		return ""
+	}
+	rest := inner[m[1]:]
+	end := len(rest)
+	if n := nextSecRe.FindStringIndex(rest); n != nil {
+		end = n[0]
+	}
+	if i := strings.Index(rest[:end], "<br><br>"); i != -1 {
+		end = i
+	}
+	if i := strings.Index(rest[:end], "<br/><br/>"); i != -1 && i < end {
+		end = i
+	}
+	txt := stripGated(stripHTML(rest[:end]))
+	if len([]rune(txt)) < 5 {
+		return ""
+	}
+	return txt
+}
+
 func findPost(doc *goquery.Document) *goquery.Selection {
 	for _, sel := range []string{".bbWrapper", ".message-cell--main", ".message-main", ".threadmark-content"} {
 		if s := doc.Find(sel).First(); s.Length() > 0 {
@@ -540,7 +643,18 @@ func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Conf
 		return errors.New("could not extract description")
 	}
 	r.ExtraDescription = desc
+	r.Overview = extractOverview(inner)
 	a.log.Info("  Description extracted (%d chars)", len([]rune(desc)))
+
+	// Engine/label from the thread's own prefix badges (authoritative) fall back
+	// to the title-bracket guess (already set on r.Engine/r.Labels) only when the
+	// page has no prefix that matches a known engine.
+	if pfxEngine, pfxLabel := parseThreadPrefixes(doc); pfxEngine != "" || pfxLabel != "" {
+		if pfxEngine != "" {
+			r.Engine = pfxEngine
+		}
+		r.Labels = mergeLabel(r.Labels, pfxLabel)
+	}
 
 	fields := extractFields(inner)
 	r.ThreadUpdated = fields["thread updated"]
@@ -557,9 +671,12 @@ func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Conf
 	if v := strings.TrimSpace(fields["version"]); v != "" {
 		r.Version = v // the thread's own Version: field is authoritative over the title-bracket guess
 	}
-	r.Tags = splitTags(fields["genre"])
+	// Tags: merge the thread header's own tag list (reliable, always rendered)
+	// with whatever the Genre spoiler block in the first post yields (may be
+	// gated or absent on some threads).
+	r.Tags = mergeTags(parseHeaderTags(doc), splitTags(fields["genre"]))
 	if len(r.Tags) > 0 {
-		a.log.Info("  Genre: %s", strings.Join(r.Tags, ", "))
+		a.log.Info("  Tags: %s", strings.Join(r.Tags, ", "))
 	}
 
 	urls, header := extractImages(post, cfg.MaxImages)
@@ -733,6 +850,25 @@ func (a *App) CheckF95Login(ctx context.Context) (LoginCheck, error) {
 		res.Detail = fmt.Sprintf("Could not parse the thread page: %v", err)
 		return res, err
 	}
+	// Primary signal: F95zone (XenForo) marks a logged-in page with
+	// data-logged-in="true" on <html id="XF" ...>, and shows the real account
+	// name in the visitor nav instead of "Sign up/Log in" links. This is the
+	// site's own authoritative marker, so it's checked first and is
+	// conclusive either way - unlike the old spoiler-gating heuristic below,
+	// which only works on threads that actually have a gated field.
+	loggedInAttr := strings.EqualFold(strings.TrimSpace(doc.Find("html").AttrOr("data-logged-in", "")), "true")
+	username := strings.TrimSpace(doc.Find(".p-navgroup-link--user .p-navgroup-linkText").First().Text())
+	if loggedInAttr || username != "" {
+		res.Checked = true
+		res.LoggedIn = true
+		if username != "" {
+			res.Detail = fmt.Sprintf("Logged in as %q (data-logged-in=\"true\" on the page) - the site cookie is working.", username)
+		} else {
+			res.Detail = `Page reports data-logged-in="true" - the site cookie is working.`
+		}
+		return res, nil
+	}
+
 	post := findPost(doc)
 	if post == nil {
 		res.Detail = "Could not find the thread's first post on the page - its layout may not match what this scraper expects."
@@ -745,9 +881,9 @@ func (a *App) CheckF95Login(ctx context.Context) (LoginCheck, error) {
 
 	switch {
 	case res.SpoilersSeen == 0:
-		res.Detail = fmt.Sprintf("%q has no spoiler-gated fields to test against, so this isn't conclusive - try again once more threads are enriched.", title)
+		res.Detail = fmt.Sprintf("%q shows no logged-in marker and has no spoiler-gated fields to test against either, so this isn't conclusive - try again once more threads are enriched.", title)
 	case res.Gated:
-		res.Detail = fmt.Sprintf("Spoiler content on %q is still gated (\"log in or register now\") - the cookie is missing, expired, or belongs to a logged-out session.", title)
+		res.Detail = fmt.Sprintf("No logged-in marker on the page, and spoiler content on %q is still gated (\"log in or register now\") - the cookie is missing, expired, or belongs to a logged-out session.", title)
 	default:
 		res.LoggedIn = true
 		res.Detail = fmt.Sprintf("Full content, including %d spoiler-gated field(s), came back from %q - the site cookie is working.", res.SpoilersSeen, title)

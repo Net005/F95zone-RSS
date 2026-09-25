@@ -31,6 +31,7 @@ func OpenDB(path string) (*DB, error) {
 			pub_date_iso TEXT NOT NULL DEFAULT '',
 			source_description TEXT NOT NULL DEFAULT '',
 			extra_description TEXT NOT NULL DEFAULT '',
+			overview TEXT NOT NULL DEFAULT '',
 			labels_json TEXT NOT NULL DEFAULT '[]',
 			engine TEXT NOT NULL DEFAULT '',
 			version TEXT NOT NULL DEFAULT '',
@@ -80,7 +81,39 @@ func OpenDB(path string) (*DB, error) {
 	if err := db.migrateWatchedColumn(); err != nil {
 		return nil, err
 	}
+	if err := db.migrateOverviewColumn(); err != nil {
+		return nil, err
+	}
 	return db, nil
+}
+
+// migrateOverviewColumn adds releases.overview to databases created before the
+// dedicated Overview field existed. Same pattern as migrateWatchedColumn.
+func (d *DB) migrateOverviewColumn() error {
+	rows, err := d.sql.Query(`PRAGMA table_info(releases)`)
+	if err != nil {
+		return err
+	}
+	has := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "overview" {
+			has = true
+		}
+	}
+	rows.Close()
+	if !has {
+		if _, err := d.sql.Exec(`ALTER TABLE releases ADD COLUMN overview TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // migrateWatchedColumn adds releases.watched to databases created before the

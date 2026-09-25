@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	appVersion       = "6.3.0"
+	appVersion       = "6.4.0"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
@@ -26,7 +26,9 @@ const (
 	// parserVersion is bumped whenever enrichment extraction logic changes (tag/engine/version
 	// parsing, spoiler handling, ...). Rows enriched by an older parser are always re-scraped once,
 	// regardless of reuse_unchanged, so an upgrade like this one corrects existing history.
-	parserVersion = 2
+	// v3 (6.4.0): tags now merge in the thread header's own tag list, engine/label now read from
+	// the thread's own prefix badges, and the Overview paragraph is extracted as its own field.
+	parserVersion = 3
 )
 
 // Config mirrors the original settings.json keys and adds a few new ones.
@@ -63,24 +65,33 @@ type Config struct {
 	PushoverUserKey  string `json:"pushover_user_key"`
 	PushoverAPIToken string `json:"pushover_api_token"`
 	PushoverPriority int    `json:"pushover_priority"` // -2..2, Pushover's own range
+
+	// HoverSlideshow*: hovering a release tile in the Releases grid cycles
+	// through its screenshots in a loop, reverting to the static cover on
+	// mouse-leave. Purely a front-end feature; these just persist the toggle
+	// and per-image delay like any other setting.
+	HoverSlideshowEnabled bool `json:"hover_slideshow_enabled"`
+	HoverSlideshowDelayMS int  `json:"hover_slideshow_delay_ms"`
 }
 
 func defaultConfig() Config {
 	return Config{
-		ScheduleHours:       12,
-		RSSSource:           defaultRSSSource,
-		MaxImages:           8,
-		RateLimitMS:         800,
-		CacheTTLHours:       2,
-		PublicBaseURL:       "https://f95-rss.bondt.network",
-		FetchMode:           "http",
-		UserAgent:           defaultUA,
-		RunOnStart:          true,
-		SchedulerEnabled:    true,
-		ReuseUnchanged:      true,
-		BackfillURLTemplate: defaultBackfillTemplate,
-		NotifyNew:           true,
-		NotifyUpdate:        true,
+		ScheduleHours:         12,
+		RSSSource:             defaultRSSSource,
+		MaxImages:             8,
+		RateLimitMS:           800,
+		CacheTTLHours:         2,
+		PublicBaseURL:         "https://f95-rss.bondt.network",
+		FetchMode:             "http",
+		UserAgent:             defaultUA,
+		RunOnStart:            true,
+		SchedulerEnabled:      true,
+		ReuseUnchanged:        true,
+		BackfillURLTemplate:   defaultBackfillTemplate,
+		NotifyNew:             true,
+		NotifyUpdate:          true,
+		HoverSlideshowEnabled: true,
+		HoverSlideshowDelayMS: 900,
 	}
 }
 
@@ -122,6 +133,9 @@ func (c *Config) Validate() error {
 	}
 	if c.PushoverPriority < -2 || c.PushoverPriority > 2 {
 		return errors.New("pushover_priority must be between -2 and 2")
+	}
+	if c.HoverSlideshowDelayMS < 100 || c.HoverSlideshowDelayMS > 10000 {
+		return errors.New("hover_slideshow_delay_ms must be between 100 and 10000")
 	}
 	if c.PushoverEnabled && (strings.TrimSpace(c.PushoverUserKey) == "" || strings.TrimSpace(c.PushoverAPIToken) == "") {
 		return errors.New("pushover_user_key and pushover_api_token are required when Pushover is enabled")

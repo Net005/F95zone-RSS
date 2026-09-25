@@ -254,7 +254,7 @@ let relScrollObserver;
 
 function tileHTML(x) {
   return `
-    <div class="tile" data-link="${esc(x.link)}">
+    <div class="tile" data-link="${esc(x.link)}" data-cover="${esc(x.cover || '')}">
       <div class="cv" style="${x.cover ? `background-image:url('${esc(x.cover)}')` : ''}">
         <button type="button" class="watch${x.watched ? ' on' : ''}" data-watch="${esc(x.link)}" title="${x.watched ? 'Stop monitoring' : 'Monitor for updates'}">${x.watched ? '★' : '☆'}</button>
         ${x.error ? '<span class="bad">FAILED</span>' : ''}${x.images ? `<span class="n">${x.images} img</span>` : ''}
@@ -262,6 +262,42 @@ function tileHTML(x) {
       <div class="tb"><div class="tt">${esc(x.title.replace(/^(\[[^\]]*\]\s*)+/, '') || x.title)}</div>
       <div class="tm">${x.labels.map(labelHTML).join('')}${engineHTML(x.engine)}${versionHTML(x.version)}<div>${ago(x.pub)}</div></div></div>
     </div>`;
+}
+
+// ── hover slideshow: cycles a release tile's screenshots while the mouse is
+// over it, reverting to the static cover on mouse-leave. Images for a tile
+// are only fetched the first time it's actually hovered (not eagerly for the
+// whole grid), and cached per-link for the rest of the session. ──
+let hoverCfg = { enabled: true, delay: 900 };
+const hoverImgCache = new Map(); // link -> [urls] | Promise
+let hoverState = null; // { link, el, cover, timer }
+
+function stopHoverSlideshow() {
+  if (!hoverState) return;
+  clearInterval(hoverState.timer);
+  hoverState.el.style.backgroundImage = hoverState.cover ? `url('${hoverState.cover}')` : '';
+  hoverState = null;
+}
+
+async function startHoverSlideshow(link, el, cover) {
+  if (!hoverCfg.enabled) return;
+  if (hoverState && hoverState.el === el) return;
+  stopHoverSlideshow();
+  hoverState = { link, el, cover, timer: 0 };
+  let imgs = hoverImgCache.get(link);
+  if (!imgs) {
+    imgs = api('/api/release?link=' + encodeURIComponent(link)).then(d => d.images && d.images.length ? d.images : [cover]).catch(() => [cover]);
+    hoverImgCache.set(link, imgs);
+  }
+  const urls = await imgs;
+  hoverImgCache.set(link, urls); // resolve to the plain array once loaded
+  // the tile may have been un-hovered while the fetch was in flight
+  if (!hoverState || hoverState.el !== el || !urls || urls.length < 2) return;
+  let i = 0;
+  hoverState.timer = setInterval(() => {
+    i = (i + 1) % urls.length;
+    el.style.backgroundImage = `url('${urls[i]}')`;
+  }, hoverCfg.delay);
 }
 
 async function toggleWatch(link, on, btn) {
@@ -340,6 +376,26 @@ $('#relGrid').onclick = e => {
   if (w) { e.stopPropagation(); toggleWatch(w.dataset.watch, !w.classList.contains('on'), w); return; }
   const t = e.target.closest('.tile'); if (t) openRelease(t.dataset.link);
 };
+$('#relGrid').addEventListener('mouseover', e => {
+  const cv = e.target.closest('.tile .cv'); if (!cv) return;
+  const tile = cv.closest('.tile');
+  startHoverSlideshow(tile.dataset.link, cv, tile.dataset.cover);
+});
+$('#relGrid').addEventListener('mouseout', e => {
+  const cv = e.target.closest('.tile .cv'); if (!cv) return;
+  if (cv.contains(e.relatedTarget)) return;
+  stopHoverSlideshow();
+});
+
+// overviewHTML renders just the release's blurb text - no banner image, no
+// duplicate screenshot grid (those live in the Screenshots section below and
+// in the hero strip above). Prefers the dedicated Overview field; falls back
+// to the general description for rows enriched before that field existed.
+function overviewHTML(r) {
+  if (r.overview) return `<p>${esc(r.overview)}</p>`;
+  if (r.extra_description) return r.extra_description;
+  return '<span class="muted">No description available.</span>';
+}
 
 function detailHTML(r, d) {
   const hero = d.cover;
@@ -365,7 +421,7 @@ function detailHTML(r, d) {
     <div class="rel-layout">
       <div>
         <h4>Overview</h4>
-        <div class="rel-desc">${d.feed_html ? '<iframe class="pv" sandbox="" id="mFrame"></iframe>' : '<span class="muted">No description available.</span>'}</div>
+        <div class="rel-desc">${overviewHTML(r)}</div>
         ${d.images.length ? `<h4>Screenshots</h4><div class="shots">${d.images.map(u => `<img loading="lazy" src="${esc(u)}" data-full="${esc(u)}">`).join('')}</div>` : ''}
       </div>
       <div>
@@ -382,20 +438,10 @@ async function openRelease(link) {
   $('#mTitle').textContent = r.title;
   $('#modalBox').classList.add('wide');
   $('#mBody').innerHTML = detailHTML(r, d);
-  const frame = $('#mFrame');
-  if (frame) {
-    const doc = `<!doctype html><meta charset=utf-8><base target=_blank>` +
-      `<style>body{margin:0;background:transparent;color:#ddd;font:14px/1.6 "Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}img{max-width:100%}</style>` +
-      `<body onload="parent.postMessage({f95FrameHeight:document.body.scrollHeight},'*')">${d.feed_html}`;
-    frame.srcdoc = doc;
-  }
   $('#mReenrich').onclick = async () => { const ok = await act(() => api('/api/reenrich', { method: 'POST', body: { link } }), 'Re-scrape started'); if (ok) closeModal(); };
   $('#mWatch').onclick = () => toggleWatchModal(link, !r.watched);
   $('#modal').hidden = false;
 }
-window.addEventListener('message', e => {
-  if (e.data && typeof e.data.f95FrameHeight === 'number') { const f = $('#mFrame'); if (f) f.style.height = Math.max(40, e.data.f95FrameHeight + 8) + 'px'; }
-});
 function toggleWatchModal(link, on) {
   toggleWatch(link, on).then(() => {
     const btn = $('#mWatch'); if (!btn) return;
@@ -483,7 +529,7 @@ $('#cfgForm').onsubmit = async e => {
   e.preventDefault(); const f = e.target, body = {};
   for (const el of f.elements) { if (!el.name) continue; body[el.name] = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value; }
   const m = $('#cfgMsg');
-  try { await api('/api/config', { method: 'PUT', body }); m.textContent = 'Saved.'; m.style.color = 'var(--ok)'; toast('Settings saved'); refresh(); }
+  try { await api('/api/config', { method: 'PUT', body }); m.textContent = 'Saved.'; m.style.color = 'var(--ok)'; toast('Settings saved'); loadHoverCfg(); refresh(); }
   catch (err) { m.textContent = err.message; m.style.color = 'var(--err)'; }
 };
 $('#btnPushoverTest').onclick = async () => {
@@ -514,12 +560,17 @@ $('#pwForm').onsubmit = async e => {
   catch (err) { m.textContent = err.message; m.style.color = 'var(--err)'; }
 };
 
+async function loadHoverCfg() {
+  try { const c = await api('/api/config'); hoverCfg = { enabled: !!c.hover_slideshow_enabled, delay: c.hover_slideshow_delay_ms || 900 }; } catch {}
+}
+
 // ── boot ──
 setInterval(() => { $('#hdrClock').textContent = new Date().toLocaleTimeString([], { hour12: false }); }, 1000);
 setInterval(refresh, 2000);
 (async () => {
   try { (await api('/api/logs?limit=500')).forEach(e => { if (e.id > lastId) { lastId = e.id; logs.push(e); } }); } catch {}
   try { const me = await (await fetch('/api/auth/status')).json(); $('#hdrUser').textContent = me.username || ''; $('#acctUser').textContent = me.username ? 'signed in as ' + me.username : ''; } catch {}
+  loadHoverCfg();
   renderMini(); connectLog(); route();
 })();
 })();

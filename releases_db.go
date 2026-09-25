@@ -19,6 +19,7 @@ type Release struct {
 	PubDateISO        string   `json:"pub_date_iso"`
 	SourceDescription string   `json:"source_description"`
 	ExtraDescription  string   `json:"extra_description"`
+	Overview          string   `json:"overview,omitempty"`
 	Labels            []string `json:"labels"`
 	Tags              []string `json:"tags"`
 	Engine            string   `json:"engine"`
@@ -72,7 +73,7 @@ func scanRelease(row interface {
 	var labels, imgs string
 	var watched int
 	err := row.Scan(&r.Link, &r.Title, &r.PubDateRaw, &r.PubDateISO, &r.SourceDescription, &r.ExtraDescription,
-		&labels, &r.Engine, &r.Version, &imgs, &r.HeaderImage, &r.ThreadUpdated, &r.ReleaseDate, &r.Developer,
+		&r.Overview, &labels, &r.Engine, &r.Version, &imgs, &r.HeaderImage, &r.ThreadUpdated, &r.ReleaseDate, &r.Developer,
 		&r.Censored, &r.OS, &r.Language, &r.Store, &r.EnrichedAt, &r.EnrichError, &r.ParserVer,
 		&r.FirstSeen, &r.LastSeen, &r.DiscoveredVia, &watched)
 	if err != nil {
@@ -85,7 +86,7 @@ func scanRelease(row interface {
 	return r, nil
 }
 
-const releaseCols = `link, title, pub_date_raw, pub_date_iso, source_description, extra_description,
+const releaseCols = `link, title, pub_date_raw, pub_date_iso, source_description, extra_description, overview,
 	labels_json, engine, version, image_urls_json, header_image, thread_updated, release_date, developer,
 	censored, os, language, store, enriched_at, enrich_error, parser_ver, first_seen, last_seen, discovered_via, watched`
 
@@ -137,17 +138,18 @@ func (d *DB) UpsertRelease(r Release, discoveredVia string) error {
 	// watched is intentionally left out of the UPDATE SET clause below: a
 	// human's "monitor this release" toggle must survive every re-scrape.
 	// The bound value here only ever applies to a genuinely new row.
-	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(link) DO UPDATE SET
 			title=excluded.title, pub_date_raw=excluded.pub_date_raw, pub_date_iso=excluded.pub_date_iso,
 			source_description=excluded.source_description, extra_description=excluded.extra_description,
+			overview=excluded.overview,
 			labels_json=excluded.labels_json, engine=excluded.engine, version=excluded.version,
 			image_urls_json=excluded.image_urls_json, header_image=excluded.header_image,
 			thread_updated=excluded.thread_updated, release_date=excluded.release_date, developer=excluded.developer,
 			censored=excluded.censored, os=excluded.os, language=excluded.language, store=excluded.store,
 			enriched_at=excluded.enriched_at, enrich_error=excluded.enrich_error, parser_ver=excluded.parser_ver,
 			last_seen=excluded.last_seen`,
-		r.Link, r.Title, r.PubDateRaw, r.PubDateISO, r.SourceDescription, r.ExtraDescription,
+		r.Link, r.Title, r.PubDateRaw, r.PubDateISO, r.SourceDescription, r.ExtraDescription, r.Overview,
 		jsonArr(r.Labels), r.Engine, r.Version, jsonArr(r.ImageURLs), r.HeaderImage, r.ThreadUpdated, r.ReleaseDate,
 		r.Developer, r.Censored, r.OS, r.Language, r.Store, r.EnrichedAt, r.EnrichError, r.ParserVer,
 		firstSeen, now, discoveredVia, boolToInt(r.Watched))

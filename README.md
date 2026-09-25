@@ -24,8 +24,11 @@ Dashboard, Releases, Notifications, Live Log, Run History, Feed, Settings.
   tag picker + chips, engine filter, sort, saved filter sets (name a combination of filters and recall it
   later - both the current filter and the saved sets persist in the browser across reloads). Infinite scroll
   loads 60 releases at a time and appends more automatically as you near the bottom (with a manual "Load
-  more" fallback). Detail view shows the exact feed rendering plus Engine/Version/Developer/Thread-updated
-  fields; click any screenshot to open it full-size in a lightbox (Escape or click-outside to close).
+  more" fallback). Detail view is a compact single-screen layout: a slim banner strip, the Overview text,
+  Screenshots (own scroll area if there are many), Info and Tags; click any screenshot to open it full-size in
+  a lightbox (Escape or click-outside to close). Hovering a tile in the grid cycles through that release's
+  screenshots (Settings > Releases grid to enable/disable and set the per-image delay); images for a tile are
+  only fetched the first time it's hovered.
 * **Notifications** - a card per new release or version change your monitoring caught, same detail layout as
   Releases, with per-item and clear-all/mark-all-read actions. Optional Pushover push (see below).
 * **Live Log** - SSE stream, level filter, search, follow/pause, download, clear.
@@ -77,14 +80,27 @@ every few hours doesn't spam your phone with the same underlying problem; the ne
 following day (or immediately after a run that finishes without error resets nothing - it's purely date-based).
 
 ## Tag, engine and version parsing
-Genre is parsed from the thread's own metadata block (the same "Thread Updated / Release Date / Developer /
-Censored / Version / OS / Language / Store / Genre" block F95zone shows on every game thread) and becomes the
-release's Tags, comma-split and trimmed. Labels (things like "COMPLETED", "ABANDONED", the raw title-bracket
-text) and Engine (matched against title brackets using F95zone's own "Prefix: Engine" list - ADRIFT, Flash,
-Godot, HTML, Java, Others, QSP, RAGS, RPGM, Ren'Py, Tads, Unity, Unreal Engine, WebGL, Wolf RPG) are
-kept as separate fields. Version prefers the thread's own explicit "Version:" field and falls back to the
-title-bracket guess only when the thread doesn't state one. Existing rows imported from an older parser
-version are automatically re-scraped once after an upgrade like this to pick up corrected values.
+Tags are read from the thread header's own tag list (`<dl class="tagList">` / `.js-tagList .tagItem`) -
+rendered for every thread regardless of login state - merged (deduped case-insensitively) with whatever the
+Genre line in the first post's metadata block yields, since that line is sometimes gated or missing. Engine is
+read from the thread's own prefix badge(s) in the page's `<h1 class="p-title-value">` (F95zone's authoritative
+"Prefix: Engine" classification - ADRIFT, Flash, Godot, HTML, Java, Others, QSP, RAGS, RPGM, Ren'Py, Tads,
+Unity, Unreal Engine, WebGL, Wolf RPG), with the title-bracket guess used only as a fallback when no prefix
+matches a known engine. The thread's other prefix badge (Completed, Abandoned, Onhold, VN, ...), if present, is
+folded into Labels alongside the title-bracket status words. Version prefers the thread's own explicit
+"Version:" field and falls back to the title-bracket guess only when the thread doesn't state one. A dedicated
+Overview field holds just the "Overview:" paragraph from the first post (separate from the general description
+HTML used to build the feed item), falling back to the general description in the UI for older rows not yet
+re-scraped. Existing rows imported from an older parser version are automatically re-scraped once after an
+upgrade like this to pick up corrected values.
+
+## Login check
+Settings > "Check F95zone login" probes a real thread page with the configured site cookie and checks the
+page's own login marker: `data-logged-in="true"` on `<html id="XF" ...>`, or a real account name in the
+visitor nav (`.p-navgroup-link--user .p-navgroup-linkText`) instead of "Sign up / Log in". This is
+authoritative either way, unlike the older heuristic (still used as a fallback) of checking whether a
+spoiler-gated field came back as real content instead of the "you don't have permission..." placeholder, which
+is inconclusive on threads with no gated fields.
 
 ## Monitoring & notifications
 Every enrichment run compares the new scrape against the stored row for that link: a link seen for the first
