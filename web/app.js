@@ -450,9 +450,36 @@ function detailHTML(r, d) {
     </div>`;
 }
 
+let currentRelLink = null;
+
+function relTileLinks() {
+  return Array.from($('#relGrid').querySelectorAll('.tile')).map(t => t.dataset.link);
+}
+
+// j/k navigation between releases while the detail modal is open. Stepping
+// past the last currently-loaded tile triggers the same infinite-scroll
+// page load used when scrolling the grid, so navigation never dead-ends
+// just because the next release hasn't been fetched yet.
+async function navigateRelease(delta) {
+  if (!currentRelLink) return;
+  let links = relTileLinks();
+  let idx = links.indexOf(currentRelLink);
+  if (idx === -1) return;
+  let nextIdx = idx + delta;
+  if (nextIdx < 0) return;
+  if (nextIdx >= links.length) {
+    if (relLoading || relState.page >= (relState.pages || 1)) return;
+    await loadMoreReleases();
+    links = relTileLinks();
+    if (nextIdx >= links.length) return;
+  }
+  openRelease(links[nextIdx]);
+}
+
 async function openRelease(link) {
   const d = await api('/api/release?link=' + encodeURIComponent(link)).catch(e => toast(e.message, true)); if (!d) return;
   const r = d.release;
+  currentRelLink = link;
   $('#mTitle').textContent = r.title;
   $('#modalBox').classList.add('wide');
   $('#mBody').innerHTML = detailHTML(r, d);
@@ -469,7 +496,7 @@ function toggleWatchModal(link, on) {
     const grid = $(`[data-watch="${CSS.escape(link)}"]`); if (grid) { grid.classList.toggle('on', on); grid.textContent = on ? '★' : '☆'; }
   });
 }
-const closeModal = () => { $('#modal').hidden = true; $('#mBody').innerHTML = ''; $('#modalBox').classList.remove('wide'); };
+const closeModal = () => { $('#modal').hidden = true; $('#mBody').innerHTML = ''; $('#modalBox').classList.remove('wide'); currentRelLink = null; };
 $('#mClose').onclick = closeModal;
 $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
 
@@ -481,9 +508,16 @@ $('#mBody').addEventListener('click', e => {
 $('#lbClose').onclick = () => { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; };
 $('#lightbox').onclick = e => { if (e.target.id === 'lightbox') { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; } };
 document.addEventListener('keydown', e => {
-  if (e.key !== 'Escape') return;
-  if (!$('#lightbox').hidden) { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; return; }
-  if (!$('#modal').hidden) closeModal();
+  if (e.key === 'Escape') {
+    if (!$('#lightbox').hidden) { $('#lightbox').hidden = true; $('#lightboxImg').src = ''; return; }
+    if (!$('#modal').hidden) closeModal();
+    return;
+  }
+  if ($('#modal').hidden || !$('#lightbox').hidden) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
+  if (e.key === 'j' || e.key === 'J') { e.preventDefault(); navigateRelease(1); }
+  else if (e.key === 'k' || e.key === 'K') { e.preventDefault(); navigateRelease(-1); }
 });
 
 // ── notifications ──
