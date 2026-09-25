@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -55,7 +57,6 @@ func (a *App) IsRunning() bool {
 	return a.running
 }
 
-// begin claims the single-run slot.
 func (a *App) begin(trigger string) (context.Context, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -102,6 +103,31 @@ func (a *App) StartRun(trigger string, force, full bool) error {
 	return nil
 }
 
+// ── feed window: which links currently make up feed.xml, so a cache hit can
+// rebuild the feed without re-fetching anything. Stored as a small settings blob. ──
+
+type feedWindow struct {
+	Links []string  `json:"links"`
+	At    time.Time `json:"at"`
+}
+
+func (a *App) loadFeedWindow() (feedWindow, bool) {
+	v, ok := a.store.db.GetSetting("feed_window")
+	if !ok {
+		return feedWindow{}, false
+	}
+	var fw feedWindow
+	if json.Unmarshal([]byte(v), &fw) != nil {
+		return feedWindow{}, false
+	}
+	return fw, true
+}
+
+func (a *App) saveFeedWindow(links []string) {
+	b, _ := json.Marshal(feedWindow{Links: links, At: time.Now()})
+	a.store.db.SetSetting("feed_window", string(b))
+}
+
 func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool) {
 	cfg := a.cfg.Get()
 	rec := RunRecord{Trigger: trigger, Started: time.Now()}
@@ -120,15 +146,21 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		}
 	}()
 
-	if !force && a.store.CacheFresh(cfg.CacheTTLHours) {
+	if fw, ok := a.loadFeedWindow(); !force && ok && len(fw.Links) > 0 && cfg.CacheTTLHours > 0 && time.Since(fw.At) < time.Duration(cfg.CacheTTLHours*float64(time.Hour)) {
 		a.log.Info("Cache is fresh (< %gh), reusing cached data", cfg.CacheTTLHours)
-		rel := a.store.Releases()
+		var rel []Release
+		for _, link := range fw.Links {
+			if r, ok := a.store.db.GetRelease(link); ok {
+				rel = append(rel, r)
+			}
+		}
 		if len(rel) > 0 {
 			if err := a.GenerateFeed(rel); err != nil {
 				a.log.Error("Feed build failed: %v", err)
 				finish("error", err.Error())
 				return
 			}
+			a.saveFeedWindow(fw.Links)
 			a.setProgress(func(p *Progress) { p.Percent = 100 })
 			a.log.Info("RSS rebuilt from cache (%d items)", len(rel))
 			rec.Items = len(rel)
@@ -153,14 +185,6 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 	rec.Items = len(items)
 	a.log.Info("Source feed: %d items to enrich", len(items))
 	a.setProgress(func(p *Progress) { p.Total = len(items); p.Status = "ENRICHING" })
-
-	var prev map[string]Release
-	if cfg.ReuseUnchanged && !full {
-		prev = map[string]Release{}
-		for _, r := range a.store.Releases() {
-			prev[r.Link] = r
-		}
-	}
 
 	var fetcher Fetcher
 	var out []Release
@@ -191,12 +215,20 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 			break
 		}
 		it := items[i]
+		existing, hadExisting := a.store.db.GetRelease(it.Link)
 		a.log.Info("[%d/%d] %s", i+1, len(items), trunc(it.Title, 50))
 		a.setProgress(func(p *Progress) { p.Current = i + 1; p.Item = trunc(it.Title, 60) })
 
 		reused := false
-		if old, ok := prev[it.Link]; ok && old.Title == it.Title && old.ExtraDescription != "" && old.EnrichError == "" {
-			it.ExtraDescription, it.ImageURLs, it.HeaderImage, it.EnrichedAt = old.ExtraDescription, old.ImageURLs, old.HeaderImage, old.EnrichedAt
+		if cfg.ReuseUnchanged && !full && hadExisting && existing.ParserVer == parserVersion &&
+			existing.Title == it.Title && existing.ExtraDescription != "" && existing.EnrichError == "" {
+			it.ExtraDescription, it.ImageURLs, it.HeaderImage, it.EnrichedAt = existing.ExtraDescription, existing.ImageURLs, existing.HeaderImage, existing.EnrichedAt
+			it.Tags, it.ThreadUpdated, it.ReleaseDate = existing.Tags, existing.ThreadUpdated, existing.ReleaseDate
+			it.Developer, it.Censored, it.OS, it.Language, it.Store = existing.Developer, existing.Censored, existing.OS, existing.Language, existing.Store
+			if existing.Version != "" {
+				it.Version = existing.Version
+			}
+			it.ParserVer = parserVersion
 			reused = true
 			rec.Reused++
 			a.log.Info("  Unchanged since last run, reusing enrichment")
@@ -232,6 +264,11 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 			}
 		}
 		a.store.SaveManifest()
+
+		a.checkAndNotify(cfg, hadExisting, existing, it, &rec)
+		if err := a.store.db.UpsertRelease(it, "feed"); err != nil {
+			a.log.Warn("Could not save %s to database: %v", trunc(it.Link, 60), err)
+		}
 		out = append(out, it)
 
 		if !reused && i < len(items)-1 {
@@ -243,7 +280,7 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 	}
 
 	if ctx.Err() != nil {
-		a.log.Warn("Run cancelled after %d/%d items - feed and cache left untouched", len(out), len(items))
+		a.log.Warn("Run cancelled after %d/%d items - feed left untouched (progress already saved to the database)", len(out), len(items))
 		finish("cancelled", "")
 		return
 	}
@@ -252,18 +289,103 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		finish("error", err.Error())
 		return
 	}
+	links := make([]string, len(out))
+	for i, r := range out {
+		links[i] = r.Link
+	}
+	a.saveFeedWindow(links)
+
 	a.setProgress(func(p *Progress) { p.Percent = 100 })
 	el := time.Since(rec.Started)
-	a.log.Info("Pipeline complete! %d items in %.1fs (%d scraped, %d reused, %d failed, %d new images)",
-		len(out), el.Seconds(), rec.Enriched, rec.Reused, rec.Failed, rec.ImagesNew)
+	a.log.Info("Pipeline complete! %d items in %.1fs (%d scraped, %d reused, %d failed, %d new, %d updated, %d new images)",
+		len(out), el.Seconds(), rec.Enriched, rec.Reused, rec.Failed, rec.New, rec.Updated, rec.ImagesNew)
 	a.log.Info("============================================================")
 	finish("ok", "")
 }
 
-// ReenrichOne re-scrapes a single thread and rebuilds the feed.
+// checkAndNotify compares a freshly processed release against what was stored
+// before this run and files a notification (and optionally a Pushover push)
+// when it's genuinely new or its version changed.
+func (a *App) checkAndNotify(cfg Config, hadExisting bool, existing, fresh Release, rec *RunRecord) {
+	kind := ""
+	oldVersion := ""
+	switch {
+	case !hadExisting && cfg.NotifyNew:
+		kind = "new"
+	case hadExisting && cfg.NotifyUpdate && existing.Version != "" && fresh.Version != "" && existing.Version != fresh.Version:
+		kind = "update"
+		oldVersion = existing.Version
+	default:
+		return
+	}
+	if rec != nil {
+		if kind == "new" {
+			rec.New++
+		} else {
+			rec.Updated++
+		}
+	}
+	cover := fresh.HeaderImage
+	if cover == "" && len(fresh.ImageURLs) > 0 {
+		cover = fresh.ImageURLs[0]
+	}
+	if cover != "" {
+		cover = hqURL(cover)
+		if n := imgFilename(cover); a.store.ImageExists(n) {
+			cover = "/f95zone/images/" + n
+		}
+	}
+	n := Notification{
+		Link: fresh.Link, Title: fresh.Title, Kind: kind, OldVersion: oldVersion, NewVersion: fresh.Version,
+		Cover: cover, Labels: fresh.Labels, Tags: fresh.Tags, CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	id, err := a.store.db.AddNotification(n)
+	if err != nil {
+		a.log.Warn("Could not save notification for %s: %v", trunc(fresh.Title, 40), err)
+		return
+	}
+	verb := "New release"
+	if kind == "update" {
+		verb = fmt.Sprintf("Updated %s -> %s", orDefault(oldVersion, "?"), fresh.Version)
+	}
+	a.log.Info("Notification: %s - %s", verb, trunc(fresh.Title, 60))
+	if cfg.PushoverEnabled {
+		title := "New: " + fresh.Title
+		if kind == "update" {
+			title = "Updated: " + fresh.Title
+		}
+		msg := verb
+		if len(fresh.Tags) > 0 {
+			msg += "\n" + joinLimited(fresh.Tags, 6)
+		}
+		if pushErr := SendPushover(cfg, title, msg, fresh.Link); pushErr != "" {
+			a.log.Warn("Pushover notification failed: %s", pushErr)
+			a.store.db.MarkPushed(id, pushErr)
+		} else {
+			a.store.db.MarkPushed(id, "")
+		}
+	}
+}
+
+func joinLimited(v []string, n int) string {
+	if len(v) > n {
+		v = v[:n]
+	}
+	s := ""
+	for i, x := range v {
+		if i > 0 {
+			s += ", "
+		}
+		s += x
+	}
+	return s
+}
+
+// ReenrichOne re-scrapes a single thread and rebuilds the feed if it's part of it.
 func (a *App) ReenrichOne(link string) error {
-	if _, ok := a.store.Find(link); !ok {
-		return errors.New("release not found in cache")
+	existing, ok := a.store.db.GetRelease(link)
+	if !ok {
+		return errors.New("release not found in the database")
 	}
 	ctx, err := a.begin("manual")
 	if err != nil {
@@ -286,46 +408,66 @@ func (a *App) ReenrichOne(link string) error {
 			f = newHTTPFetcher(cfg)
 		}
 		defer f.Close()
-		rels := a.store.Releases()
-		for i := range rels {
-			if rels[i].Link != link {
-				continue
-			}
-			a.setProgress(func(p *Progress) {
-				p.Status = "ENRICHING"
-				p.Total = 1
-				p.Current = 1
-				p.Item = trunc(rels[i].Title, 60)
-			})
-			if err := a.enrichRelease(ctx, f, &rels[i], cfg); err != nil {
-				a.log.Warn("Re-enrich failed: %v", err)
-				rels[i].EnrichError = err.Error()
-				status = "ERROR"
-			} else {
-				for _, u := range rels[i].ImageURLs {
-					if _, _, err := a.downloadImage(ctx, cfg, u, link); err != nil {
-						a.log.Warn("Image download error: %v", err)
-					}
+		a.setProgress(func(p *Progress) {
+			p.Status = "ENRICHING"
+			p.Total = 1
+			p.Current = 1
+			p.Item = trunc(existing.Title, 60)
+		})
+		it := existing
+		if err := a.enrichRelease(ctx, f, &it, cfg); err != nil {
+			a.log.Warn("Re-enrich failed: %v", err)
+			it.EnrichError = err.Error()
+			status = "ERROR"
+		} else {
+			for _, u := range it.ImageURLs {
+				if _, _, err := a.downloadImage(ctx, cfg, u, link); err != nil {
+					a.log.Warn("Image download error: %v", err)
 				}
-				a.store.SaveManifest()
-				status = "DONE"
 			}
-			if err := a.GenerateFeed(rels); err != nil {
-				a.log.Error("Feed build failed: %v", err)
+			a.store.SaveManifest()
+			status = "DONE"
+		}
+		a.checkAndNotify(cfg, true, existing, it, nil)
+		if err := a.store.db.UpsertRelease(it, existing.DiscoveredVia); err != nil {
+			a.log.Warn("Could not save %s: %v", trunc(link, 60), err)
+		}
+		if fw, ok := a.loadFeedWindow(); ok {
+			for _, l := range fw.Links {
+				if l == link {
+					if rel := loadWindow(a, fw.Links); rel != nil {
+						a.GenerateFeed(rel)
+					}
+					break
+				}
 			}
-			return
 		}
 	}()
 	return nil
 }
 
+func loadWindow(a *App, links []string) []Release {
+	var out []Release
+	for _, l := range links {
+		if r, ok := a.store.db.GetRelease(l); ok {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// RebuildFeed rebuilds feed.xml from the current feed window without touching the network.
 func (a *App) RebuildFeed() (int, error) {
 	if a.IsRunning() {
 		return 0, ErrBusy
 	}
-	rel := a.store.Releases()
+	fw, ok := a.loadFeedWindow()
+	if !ok || len(fw.Links) == 0 {
+		return 0, errors.New("no feed window yet - run a scrape first")
+	}
+	rel := loadWindow(a, fw.Links)
 	if len(rel) == 0 {
-		return 0, errors.New("cache is empty - run a scrape first")
+		return 0, errors.New("the releases in the feed window are no longer in the database")
 	}
 	return len(rel), a.GenerateFeed(rel)
 }
@@ -382,4 +524,169 @@ func (a *App) RunScheduler(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// ── backfill: harvest older releases from the client-rendered listing pages ──
+
+func (a *App) StartBackfill(pages int) error {
+	if pages < 1 {
+		pages = 1
+	}
+	if pages > 200 {
+		pages = 200
+	}
+	ctx, err := a.begin("backfill")
+	if err != nil {
+		return err
+	}
+	go a.runBackfill(ctx, pages)
+	return nil
+}
+
+func (a *App) runBackfill(ctx context.Context, pages int) {
+	cfg := a.cfg.Get()
+	rec := RunRecord{Trigger: "backfill", Started: time.Now()}
+	finish := func(status, errMsg string) {
+		rec.Status, rec.Error = status, errMsg
+		rec.Finished = time.Now()
+		rec.Duration = rec.Finished.Sub(rec.Started).Seconds()
+		a.store.AddRun(rec)
+		ps := map[string]string{"ok": "DONE", "error": "ERROR", "cancelled": "CANCELLED"}[status]
+		a.end(ps)
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			a.log.Error("Backfill panic: %v", r)
+			finish("error", "panic")
+		}
+	}()
+
+	a.log.Info("============================================================")
+	a.log.Info("Starting backfill: up to %d listing page(s)", pages)
+	if cfg.SiteCookie == "" {
+		a.log.Warn("No site_cookie set in Settings - the listing page likely needs a logged-in F95zone session to return results")
+	}
+
+	bf, err := newBrowserFetcher(ctx, cfg)
+	if err != nil {
+		a.log.Error("Backfill: could not start Chromium: %v", err)
+		finish("error", err.Error())
+		return
+	}
+	defer bf.Close()
+
+	existing := a.store.db.AllLinks()
+	seen := map[string]bool{}
+	var discovered []Release
+	consecutiveEmpty := 0
+
+	for page := 1; page <= pages; page++ {
+		if ctx.Err() != nil {
+			break
+		}
+		url := fmt.Sprintf(cfg.BackfillURLTemplate, page)
+		a.setProgress(func(p *Progress) { p.Status = "FETCHING"; p.Item = fmt.Sprintf("listing page %d/%d", page, pages) })
+		a.log.Info("Backfill: loading listing page %d/%d", page, pages)
+		items, err := a.harvestListingPage(ctx, bf, url)
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			a.log.Warn("Backfill: page %d failed to load: %v", page, err)
+			consecutiveEmpty++
+			if consecutiveEmpty >= 2 {
+				a.log.Warn("Backfill: stopping after repeated failures")
+				break
+			}
+			continue
+		}
+		fresh := 0
+		for _, it := range items {
+			if existing[it.Link] || seen[it.Link] {
+				continue
+			}
+			seen[it.Link] = true
+			discovered = append(discovered, it)
+			fresh++
+		}
+		a.log.Info("Backfill: page %d - %d thread link(s) found, %d new", page, len(items), fresh)
+		if fresh == 0 {
+			consecutiveEmpty++
+		} else {
+			consecutiveEmpty = 0
+		}
+		if consecutiveEmpty >= 3 {
+			a.log.Info("Backfill: 3 pages in a row with nothing new, stopping early")
+			break
+		}
+		if page < pages {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(cfg.RateLimitMS) * time.Millisecond):
+			}
+		}
+	}
+
+	rec.Items = len(discovered)
+	if len(discovered) == 0 {
+		a.log.Info("Backfill: no new threads discovered")
+		finish("ok", "")
+		return
+	}
+	a.log.Info("Backfill: %d new thread(s) discovered - enriching...", len(discovered))
+	a.setProgress(func(p *Progress) { p.Status = "ENRICHING"; p.Total = len(discovered); p.Current = 0 })
+
+	var fetcher Fetcher
+	if cfg.FetchMode == "browser" {
+		fetcher = bf
+	} else {
+		fetcher = newHTTPFetcher(cfg)
+		defer fetcher.Close()
+	}
+
+	for i, it := range discovered {
+		if ctx.Err() != nil {
+			break
+		}
+		a.setProgress(func(p *Progress) { p.Current = i + 1; p.Item = trunc(it.Title, 60) })
+		a.log.Info("[backfill %d/%d] %s", i+1, len(discovered), trunc(it.Title, 50))
+		if err := a.enrichRelease(ctx, fetcher, &it, cfg); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			a.log.Warn("Backfill enrichment failed for %s: %v", trunc(it.Link, 60), err)
+			it.EnrichError = err.Error()
+			rec.Failed++
+		} else {
+			rec.Enriched++
+		}
+		for _, u := range it.ImageURLs {
+			if ctx.Err() != nil {
+				break
+			}
+			if _, isNew, err := a.downloadImage(ctx, cfg, u, it.Link); err == nil && isNew {
+				rec.ImagesNew++
+			}
+		}
+		a.store.SaveManifest()
+		if err := a.store.db.UpsertRelease(it, "backfill"); err != nil {
+			a.log.Warn("Could not save %s: %v", trunc(it.Link, 60), err)
+		}
+		if i < len(discovered)-1 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(time.Duration(cfg.RateLimitMS) * time.Millisecond):
+			}
+		}
+	}
+
+	if ctx.Err() != nil {
+		a.log.Warn("Backfill cancelled - threads enriched so far are already saved")
+		finish("cancelled", "")
+		return
+	}
+	el := time.Since(rec.Started)
+	a.log.Info("Backfill complete! %d new threads, %d enriched, %d failed in %.1fs", len(discovered), rec.Enriched, rec.Failed, el.Seconds())
+	a.log.Info("============================================================")
+	finish("ok", "")
 }

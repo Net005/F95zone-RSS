@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -16,24 +17,13 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
 // ──────────────────────────────────────────────────────────────
 //  Source RSS
 // ──────────────────────────────────────────────────────────────
-
-var bracketRe = regexp.MustCompile(`\[(.*?)\]`)
-
-var prefixToTag = map[string]string{
-	"RPGM": "engine-rpgmaker", "VN": "genre-visualnovel", "Unity": "engine-unity",
-	"Ren'Py": "engine-renpy", "QSP": "engine-qsp", "HTML": "engine-html",
-	"RAGS": "engine-rags", "Java": "engine-java", "Flash": "engine-flash",
-	"ADRIFT": "engine-adrift", "Wolf RPG": "engine-wolfrpg", "Unreal Engine": "engine-unreal",
-	"WebGL": "engine-webgl", "Godot": "engine-godot", "Completed": "status-completed",
-	"Onhold": "status-onhold", "Abandoned": "status-abandoned", "SiteRip": "source-siterip",
-	"Collection": "type-collection",
-}
 
 type srcFeed struct {
 	Channel struct {
@@ -62,6 +52,9 @@ func (a *App) fetchSourceRSS(ctx context.Context, cfg Config) ([]Release, error)
 	req, _ := http.NewRequestWithContext(ctx, "GET", cfg.RSSSource, nil)
 	req.Header.Set("User-Agent", cfg.UserAgent)
 	req.Header.Set("Accept", "application/rss+xml, application/xml, text/xml")
+	if cfg.SiteCookie != "" {
+		req.Header.Set("Cookie", cfg.SiteCookie)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("RSS fetch error: %w", err)
@@ -86,38 +79,10 @@ func (a *App) fetchSourceRSS(ctx context.Context, cfg Config) ([]Release, error)
 			Link:              strings.TrimSpace(it.Link),
 			PubDateRaw:        strings.TrimSpace(it.PubDate),
 			SourceDescription: strings.TrimSpace(it.Description),
-			Genres:            []string{},
 			ImageURLs:         []string{},
 		}
 		r.PubDateISO = parseRSSDate(r.PubDateRaw)
-		cats := []string{}
-		has := func(v string) bool {
-			for _, c := range cats {
-				if c == v {
-					return true
-				}
-			}
-			return false
-		}
-		for _, c := range it.Categories {
-			if c = strings.TrimSpace(c); c != "" {
-				cats = append(cats, c)
-			}
-		}
-		for _, m := range bracketRe.FindAllStringSubmatch(r.Title, -1) {
-			bt := strings.TrimSpace(m[1])
-			tag := bt
-			if t, ok := prefixToTag[bt]; ok {
-				tag = t
-			}
-			if !has(tag) {
-				cats = append(cats, tag)
-			}
-			if !has(bt) {
-				cats = append(cats, bt)
-			}
-		}
-		r.Categories = cats
+		r.Labels, r.Engine, r.Version = parseTitleBrackets(r.Title)
 		out = append(out, r)
 	}
 	return out, nil
@@ -128,6 +93,61 @@ func orDefault(s, d string) string {
 		return d
 	}
 	return s
+}
+
+// ──────────────────────────────────────────────────────────────
+//  Title bracket parsing: status labels, engine, version guess
+// ──────────────────────────────────────────────────────────────
+
+var bracketRe = regexp.MustCompile(`\[(.*?)\]`)
+
+var engineNames = map[string]string{
+	"rpgm": "RPGM", "rpg maker": "RPGM", "rpg maker mv": "RPGM", "rpg maker vx": "RPGM",
+	"unity": "Unity", "ren'py": "Ren'Py", "renpy": "Ren'Py", "qsp": "QSP", "html": "HTML",
+	"rags": "RAGS", "java": "Java", "flash": "Flash", "adrift": "ADRIFT", "wolf rpg": "Wolf RPG",
+	"unreal engine": "Unreal Engine", "unreal": "Unreal Engine", "webgl": "WebGL", "godot": "Godot",
+	"tads": "TADS", "gamemaker": "GameMaker studio", "ocean": "Ocean",
+}
+
+var statusWords = map[string]string{
+	"update": "UPDATE", "new": "NEW", "completed": "Completed", "onhold": "Onhold", "on-hold": "Onhold",
+	"abandoned": "Abandoned", "siterip": "SiteRip", "collection": "Collection", "poll": "Poll", "cheat mod": "Cheat Mod",
+}
+
+var versionGuessRe = regexp.MustCompile(`(?i)^(v|ver\.?|version)?\s*\d`)
+
+// parseTitleBrackets reads every "[...]" token in a release title and sorts it
+// into a status label, the engine, or a version guess (overridden later by the
+// thread's own "Version:" field when present).
+func parseTitleBrackets(title string) (labels []string, engine, version string) {
+	seen := map[string]bool{}
+	for _, m := range bracketRe.FindAllStringSubmatch(title, -1) {
+		t := strings.TrimSpace(m[1])
+		if t == "" {
+			continue
+		}
+		lower := strings.ToLower(t)
+		if canon, ok := engineNames[lower]; ok {
+			engine = canon
+			continue
+		}
+		if canon, ok := statusWords[lower]; ok {
+			if !seen[canon] {
+				labels = append(labels, canon)
+				seen[canon] = true
+			}
+			continue
+		}
+		if versionGuessRe.MatchString(t) {
+			version = t
+			continue
+		}
+		if !seen[t] {
+			labels = append(labels, t)
+			seen[t] = true
+		}
+	}
+	return
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -142,11 +162,12 @@ type Fetcher interface {
 type httpFetcher struct {
 	client *http.Client
 	ua     string
+	cookie string
 }
 
 func newHTTPFetcher(cfg Config) *httpFetcher {
 	jar, _ := cookiejar.New(nil)
-	return &httpFetcher{client: &http.Client{Jar: jar, Timeout: 60 * time.Second}, ua: cfg.UserAgent}
+	return &httpFetcher{client: &http.Client{Jar: jar, Timeout: 60 * time.Second}, ua: cfg.UserAgent, cookie: cfg.SiteCookie}
 }
 
 func (f *httpFetcher) Page(ctx context.Context, u string) (string, error) {
@@ -154,6 +175,9 @@ func (f *httpFetcher) Page(ctx context.Context, u string) (string, error) {
 	req.Header.Set("User-Agent", f.ua)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	if f.cookie != "" {
+		req.Header.Set("Cookie", f.cookie)
+	}
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return "", err
@@ -184,6 +208,28 @@ type browserFetcher struct {
 	allocCancel context.CancelFunc
 }
 
+// siteCookies turns a raw "name=value; name2=value2" Cookie header into cookie
+// params chromedp can install for the domain, so a logged-in session is visible
+// to every page the browser loads (including the Angular listing used by backfill).
+func siteCookies(raw string) []*network.CookieParam {
+	var out []*network.CookieParam
+	for _, part := range strings.Split(raw, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 || strings.TrimSpace(kv[0]) == "" {
+			continue
+		}
+		out = append(out, &network.CookieParam{
+			Name: strings.TrimSpace(kv[0]), Value: strings.TrimSpace(kv[1]),
+			Domain: ".f95zone.to", Path: "/", Secure: true,
+		})
+	}
+	return out
+}
+
 func newBrowserFetcher(parent context.Context, cfg Config) (*browserFetcher, error) {
 	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	opts = append(opts,
@@ -203,6 +249,21 @@ func newBrowserFetcher(parent context.Context, cfg Config) (*browserFetcher, err
 		cancel()
 		allocCancel()
 		return nil, fmt.Errorf("could not start Chromium: %w", err)
+	}
+	if cookies := siteCookies(cfg.SiteCookie); len(cookies) > 0 {
+		setCookies := make([]chromedp.Action, 0, len(cookies)+1)
+		setCookies = append(setCookies, network.Enable())
+		for _, c := range cookies {
+			cp := c
+			setCookies = append(setCookies, chromedp.ActionFunc(func(ctx context.Context) error {
+				return network.SetCookie(cp.Name, cp.Value).WithDomain(cp.Domain).WithPath(cp.Path).WithSecure(cp.Secure).Do(ctx)
+			}))
+		}
+		if err := chromedp.Run(ctx, setCookies...); err != nil {
+			cancel()
+			allocCancel()
+			return nil, fmt.Errorf("could not set session cookies: %w", err)
+		}
 	}
 	return &browserFetcher{ctx: ctx, cancel: cancel, allocCancel: allocCancel}, nil
 }
@@ -237,17 +298,25 @@ func firstNonEmpty(v ...string) string {
 }
 
 // ──────────────────────────────────────────────────────────────
-//  Thread page enrichment (port of ENRICH_JS + image scan)
+//  Thread page enrichment
 // ──────────────────────────────────────────────────────────────
 
 var (
 	overviewRe = regexp.MustCompile(`(?i)<b[^>]*>\s*Overview\s*</b>\s*:?\s*`)
-	nextSecRe  = regexp.MustCompile(`(?i)<b[^>]*>\s*(?:Installation|Thread\s*Updated|Developer|Publisher|Censorship|Version|OS|Language|Store|Genre|Notes?|Changelog|Downloads?|Links?)\s*[:</]`)
+	nextSecRe  = regexp.MustCompile(`(?i)<b[^>]*>\s*(?:Installation|Thread\s*Updated|Developer|Publisher|Censorship|Censored|Version|OS|Language|Store|Genre|Length|Notes?|Changelog|Downloads?|Links?)\s*[:</]`)
 	ovTextRe   = regexp.MustCompile(`(?i)^\s*Overview\s*:?\s*`)
 	skipImg    = []string{"avatar", "smilie", "emoji", "icon", "logo", "spinner", "loading", "styles", "thumbs", "ui-"}
-)
 
-const postSelectors = ".bbWrapper, .message-cell--main, .message-main, .threadmark-content"
+	// fieldBoundaryRe finds every "<b>Label</b>:" heading used for the thread's
+	// metadata block (Thread Updated, Version, Genre, ...). The value of each
+	// field runs until the next heading.
+	// Includes a few labels we don't keep (Installation, Changelog, ...) purely
+	// so they terminate the previous field's value instead of being swallowed
+	// into it - Genre in particular runs right up to Installation on most threads.
+	fieldBoundaryRe = regexp.MustCompile(`(?i)<b[^>]*>\s*(Thread\s*Updated|Release\s*Date|Developer|Publisher|Censored|Censorship|Version|OS|Language|Store|Genre|Length|Installation|Changelog|Downloads?|Links?|Notes?)\s*</b>\s*:?\s*`)
+	tagStripRe      = regexp.MustCompile(`<[^>]+>`)
+	wsRe            = regexp.MustCompile(`\s+`)
+)
 
 func findPost(doc *goquery.Document) *goquery.Selection {
 	for _, sel := range []string{".bbWrapper", ".message-cell--main", ".message-main", ".threadmark-content"} {
@@ -258,22 +327,56 @@ func findPost(doc *goquery.Document) *goquery.Selection {
 	return nil
 }
 
-func extractDescription(html string) (string, bool) {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return "", false
+// unwrapSpoilers keeps a spoiler's content in place (F95zone renders it into
+// the page HTML for guests too, just visually collapsed) and drops only the
+// "SPOILER" toggle button/title around it. Earlier versions of this scraper
+// removed spoilers outright, which silently ate the Genre line on most threads.
+func unwrapSpoilers(post *goquery.Selection) {
+	for i := 0; i < 6; i++ {
+		sp := post.Find(".bbCodeSpoiler")
+		if sp.Length() == 0 {
+			return
+		}
+		sp.Each(func(_ int, s *goquery.Selection) {
+			inner := s.Find(".bbCodeSpoiler-content")
+			var h string
+			if inner.Length() > 0 {
+				h, _ = inner.Html()
+			} else {
+				h, _ = s.Html()
+			}
+			s.ReplaceWithHtml(h)
+		})
 	}
-	post := findPost(doc)
-	if post == nil {
-		return "", false
-	}
-	// guests cannot see spoiler content, hidden blocks, or block titles
-	post.Find(".bbCodeSpoiler").Remove()
-	post.Find(".messageHide").Remove()
-	post.Find(".bbCodeBlock-title, .bbCodeBlock-expandLink, .bbCodeBlock-shrinkLink").Remove()
-	inner, _ := post.Html()
-	fullText := post.Text()
+}
 
+func cleanPost(post *goquery.Selection) {
+	unwrapSpoilers(post)
+	// A spoiler that's actually gated behind login/registration doesn't come
+	// through as real content even after unwrapping - F95zone renders a fixed
+	// "you don't have permission..." placeholder block instead. Drop those so
+	// they don't end up stored as the description or a "genre".
+	post.Find(".bbCodeBlock--spoiler, .messageHide").Remove()
+	post.Find(".bbCodeBlock-title, .bbCodeBlock-expandLink, .bbCodeBlock-shrinkLink").Remove()
+}
+
+var gatedPlaceholderRe = regexp.MustCompile(`(?i)you (don't|do not) have permission to view the spoiler content\.?\s*(log in or register now\.?)?`)
+
+// stripGated is a safety net for the "you don't have permission..." notice
+// slipping through in some other wrapper shape; cleanPost's class-based
+// removal is the primary defense.
+func stripGated(s string) string {
+	return strings.TrimSpace(gatedPlaceholderRe.ReplaceAllString(s, ""))
+}
+
+func stripHTML(s string) string {
+	s = tagStripRe.ReplaceAllString(s, " ")
+	s = html.UnescapeString(s)
+	s = strings.ReplaceAll(s, "​", "")
+	return strings.TrimSpace(wsRe.ReplaceAllString(s, " "))
+}
+
+func extractDescription(inner, fullText string) (string, bool) {
 	desc := ""
 	if m := overviewRe.FindStringIndex(inner); m != nil {
 		rest := inner[m[1]:]
@@ -306,8 +409,43 @@ func extractDescription(html string) (string, bool) {
 		}
 		desc = strings.ReplaceAll(t, "\n", "<br>")
 	}
-	desc = strings.TrimSpace(desc)
-	return desc, desc != ""
+	return strings.TrimSpace(desc), strings.TrimSpace(desc) != ""
+}
+
+// extractFields reads the "<b>Label</b>: value" metadata block (Thread Updated,
+// Version, Genre, ...) out of the cleaned post HTML.
+func extractFields(inner string) map[string]string {
+	out := map[string]string{}
+	matches := fieldBoundaryRe.FindAllStringSubmatchIndex(inner, -1)
+	for i, m := range matches {
+		label := strings.ToLower(wsRe.ReplaceAllString(inner[m[2]:m[3]], " "))
+		valStart := m[1]
+		valEnd := len(inner)
+		if i+1 < len(matches) {
+			valEnd = matches[i+1][0]
+		}
+		out[label] = stripGated(stripHTML(inner[valStart:valEnd]))
+	}
+	return out
+}
+
+// splitTags turns "2D Game, 2D CG, Corruption" into a trimmed, deduplicated slice.
+func splitTags(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[strings.ToLower(p)] {
+			continue
+		}
+		seen[strings.ToLower(p)] = true
+		out = append(out, p)
+	}
+	return out
 }
 
 func absURL(src string) string {
@@ -320,15 +458,7 @@ func absURL(src string) string {
 	return src
 }
 
-func extractImages(html string, max int) (urls []string, header string) {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return
-	}
-	post := findPost(doc)
-	if post == nil {
-		return
-	}
+func extractImages(post *goquery.Selection, max int) (urls []string, header string) {
 	seen := map[string]bool{}
 	add := func(u string) {
 		if !seen[u] {
@@ -376,17 +506,50 @@ func extractImages(html string, max int) (urls []string, header string) {
 
 func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Config) error {
 	a.log.Info("Enriching: %s...", trunc(r.Title, 50))
-	html, err := f.Page(ctx, r.Link)
+	rawHTML, err := f.Page(ctx, r.Link)
 	if err != nil {
 		return fmt.Errorf("could not load thread page: %w", err)
 	}
-	if desc, ok := extractDescription(html); ok {
-		r.ExtraDescription = desc
-		a.log.Info("  Description extracted (%d chars)", len([]rune(desc)))
-	} else {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(rawHTML))
+	if err != nil {
+		return fmt.Errorf("could not parse thread page: %w", err)
+	}
+	post := findPost(doc)
+	if post == nil {
 		return errors.New("first post container not found")
 	}
-	urls, header := extractImages(html, cfg.MaxImages)
+	cleanPost(post)
+	inner, _ := post.Html()
+	fullText := post.Text()
+
+	desc, ok := extractDescription(inner, fullText)
+	if !ok {
+		return errors.New("could not extract description")
+	}
+	r.ExtraDescription = desc
+	a.log.Info("  Description extracted (%d chars)", len([]rune(desc)))
+
+	fields := extractFields(inner)
+	r.ThreadUpdated = fields["thread updated"]
+	r.ReleaseDate = fields["release date"]
+	if r.Developer = fields["developer"]; r.Developer == "" {
+		r.Developer = fields["publisher"]
+	}
+	if r.Censored = fields["censored"]; r.Censored == "" {
+		r.Censored = fields["censorship"]
+	}
+	r.OS = fields["os"]
+	r.Language = fields["language"]
+	r.Store = fields["store"]
+	if v := strings.TrimSpace(fields["version"]); v != "" {
+		r.Version = v // the thread's own Version: field is authoritative over the title-bracket guess
+	}
+	r.Tags = splitTags(fields["genre"])
+	if len(r.Tags) > 0 {
+		a.log.Info("  Genre: %s", strings.Join(r.Tags, ", "))
+	}
+
+	urls, header := extractImages(post, cfg.MaxImages)
 	r.ImageURLs = urls
 	r.HeaderImage = header
 	if urls == nil {
@@ -397,6 +560,7 @@ func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Conf
 	}
 	r.EnrichedAt = time.Now().UTC().Format(time.RFC3339)
 	r.EnrichError = ""
+	r.ParserVer = parserVersion
 	return nil
 }
 
@@ -424,6 +588,9 @@ func (a *App) downloadImage(ctx context.Context, cfg Config, u, thread string) (
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
 	req.Header.Set("User-Agent", cfg.UserAgent)
+	if cfg.SiteCookie != "" {
+		req.Header.Set("Cookie", cfg.SiteCookie)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", false, err
@@ -441,4 +608,61 @@ func (a *App) downloadImage(ctx context.Context, cfg Config, u, thread string) (
 	}
 	a.store.AddManifest(thread, imgHash(u), fname)
 	return fname, true, nil
+}
+
+// ──────────────────────────────────────────────────────────────
+//  Backfill: harvest thread links from the Angular "latest alpha" listing
+// ──────────────────────────────────────────────────────────────
+
+var threadHrefRe = regexp.MustCompile(`/threads/[^/?#]+\.\d+/?$`)
+
+const harvestJS = `(() => {
+  const out = []; const seen = new Set();
+  document.querySelectorAll('a[href*="/threads/"]').forEach(a => {
+    let href = a.getAttribute('href') || '';
+    if (!href) return;
+    if (href.startsWith('//')) href = location.protocol + href;
+    else if (href.startsWith('/')) href = location.origin + href;
+    href = href.split('#')[0].split('?')[0];
+    const title = (a.textContent || '').trim();
+    if (!title || seen.has(href)) return;
+    seen.add(href);
+    out.push({link: href, title: title});
+  });
+  return out;
+})()`
+
+type harvestedLink struct {
+	Link  string `json:"link"`
+	Title string `json:"title"`
+}
+
+// harvestListingPage loads one page of the client-rendered "latest alpha"
+// listing and pulls out thread links + titles. It's best-effort: F95zone
+// doesn't document this endpoint, and full results likely need a logged-in
+// session cookie (set in Settings).
+func (a *App) harvestListingPage(ctx context.Context, bf *browserFetcher, pageURL string) ([]Release, error) {
+	tctx, cancel := context.WithTimeout(bf.ctx, 60*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, cancel)
+	defer stop()
+	var found []harvestedLink
+	err := chromedp.Run(tctx,
+		chromedp.Navigate(pageURL),
+		chromedp.Sleep(4*time.Second),
+		chromedp.Evaluate(harvestJS, &found),
+	)
+	if err != nil {
+		return nil, err
+	}
+	var out []Release
+	for _, h := range found {
+		if !threadHrefRe.MatchString(h.Link) {
+			continue
+		}
+		r := Release{Link: h.Link, Title: h.Title, ImageURLs: []string{}}
+		r.Labels, r.Engine, r.Version = parseTitleBrackets(r.Title)
+		out = append(out, r)
+	}
+	return out, nil
 }

@@ -151,3 +151,51 @@ h4{margin:18px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.8px
 .autherr{color:var(--err);font-size:13px;min-height:18px;margin-top:10px}
 .userchip{color:#ccc;font-size:12px;font-weight:600}
 [hidden]{display:none!important}
+
+/* nav badge */
+.badge{display:inline-block;background:var(--accent);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:4px;vertical-align:2px}
+
+/* tag picker / chips */
+.tagbar{align-items:flex-start;flex-wrap:wrap}
+.tagpicker{position:relative}
+.tagpanel{position:absolute;top:calc(100% + 6px);left:0;width:280px;max-height:320px;background:#1c1c1c;border:1px solid var(--line2);border-radius:var(--radius);box-shadow:0 8px 24px #000c;padding:8px;z-index:15;display:flex;flex-direction:column;gap:6px}
+.tagoptions{overflow:auto;max-height:250px;display:flex;flex-direction:column}
+.tagoption{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:3px;cursor:pointer;font-size:13px}
+.tagoption:hover{background:#2a2a2a}
+.tagoption .c{color:var(--muted);font-size:11px;margin-left:auto}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--accent-soft);border:1px solid var(--accent2);color:#f3c7c9;padding:3px 6px 3px 10px;border-radius:14px;font-size:12px}
+.chip button{background:none;border:0;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0 2px;opacity:.8}
+.chip button:hover{opacity:1}
+.in.sm{padding:5px 8px;font-size:12px}
+
+/* pager */
+.pager{display:flex;gap:4px;align-items:center;justify-content:center;margin:14px 0;flex-wrap:wrap}
+.pager button{background:#222;border:1px solid var(--line2);color:#ccc;padding:5px 10px;border-radius:3px;font:600 12px inherit;cursor:pointer}
+.pager button:hover:not(:disabled){background:#2c2c2c}
+.pager button.on{background:var(--accent);border-color:var(--accent2);color:#fff}
+.pager button:disabled{opacity:.35;cursor:default}
+
+.hr{border-top:1px solid var(--line);margin:14px 0}
+
+/* notifications */
+.notif-tile{display:flex;gap:12px;padding:12px;background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--radius);cursor:pointer}
+.notif-tile.read{border-left-color:var(--line2);opacity:.7}
+.notif-tile .cv{width:80px;height:50px;flex:none;background:#0c0c0c center/cover no-repeat;border-radius:3px}
+.notif-tile .body{flex:1;min-width:0}
+.notif-tile .tt{font-weight:600;color:#fff;font-size:13px}
+.notif-tile .meta{color:var(--muted);font-size:11px;margin-top:3px}
+.notif-tile .kind{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;margin-right:6px;text-transform:uppercase}
+.notif-tile .kind.new{background:#2e9e5b;color:#fff}.notif-tile .kind.update{background:#c0392b;color:#fff}
+.notif-tile .x{background:none;border:0;color:var(--muted);font-size:18px;cursor:pointer;align-self:flex-start}
+.notif-tile .x:hover{color:#fff}
+
+/* lightbox */
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:80;display:flex;align-items:center;justify-content:center;padding:4vh 4vw}
+.lightbox[hidden]{display:none}
+.lightbox img{max-width:100%;max-height:100%;border-radius:4px;box-shadow:0 8px 40px #000}
+.lbx{position:absolute;top:18px;right:24px;background:none;border:0;color:#fff;font-size:36px;line-height:1;cursor:pointer;opacity:.8}
+.lbx:hover{opacity:1}
+.shots img{cursor:zoom-in}
+
+textarea.in{resize:vertical;font-family:inherit}

@@ -54,7 +54,9 @@ func main() {
 		os.Exit(1)
 	}
 	cfg := NewConfigStore(db, filepath.Join(*base, "config", "settings.json"), func(l, m string) { logs.Log(l, "%s", m) })
-	app := &App{cfg: cfg, log: logs, store: NewStore(filepath.Join(*base, "data")), start: time.Now(), port: *port}
+	store := NewStore(db, filepath.Join(*base, "data"))
+	store.ImportLegacyCache(filepath.Join(*base, "data", "releases_cache.json"), logs)
+	app := &App{cfg: cfg, log: logs, store: store, start: time.Now(), port: *port}
 	app.progress = Progress{Status: "IDLE"}
 
 	c := cfg.Get()

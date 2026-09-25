@@ -92,12 +92,33 @@ func (a *App) BuildDescription(rel Release, cfg Config) string {
 		parts = append(parts, g.String())
 	}
 
-	if len(rel.Categories) > 0 {
-		var tags []string
-		for _, c := range rel.Categories {
-			tags = append(tags, `<span style="display:inline-block;background:#6d4aff;color:white;padding:3px 8px;border-radius:4px;font-size:11px;margin:4px 2px 0 0;">`+html.EscapeString(c)+`</span>`)
+	var meta []string
+	if rel.Engine != "" {
+		meta = append(meta, "Engine: "+html.EscapeString(rel.Engine))
+	}
+	if rel.Version != "" {
+		meta = append(meta, "Version: "+html.EscapeString(rel.Version))
+	}
+	if len(meta) > 0 {
+		parts = append(parts, `<div style="margin:8px 0;color:#9a9a9a;font-size:12px;">`+strings.Join(meta, " &nbsp;&middot;&nbsp; ")+`</div>`)
+	}
+
+	badge := func(c, bg string) string {
+		return `<span style="display:inline-block;background:` + bg + `;color:white;padding:3px 8px;border-radius:4px;font-size:11px;margin:4px 4px 0 0;">` + html.EscapeString(c) + `</span>`
+	}
+	if len(rel.Labels) > 0 {
+		var b []string
+		for _, c := range rel.Labels {
+			b = append(b, badge(c, "#6d4aff"))
 		}
-		parts = append(parts, `<div style="margin:16px 0 8px 0;"><strong>Tags:</strong> `+strings.Join(tags, " ")+`</div>`)
+		parts = append(parts, `<div style="margin:16px 0 4px 0;"><strong>Labels:</strong> `+strings.Join(b, " ")+`</div>`)
+	}
+	if len(rel.Tags) > 0 {
+		var b []string
+		for _, c := range rel.Tags {
+			b = append(b, badge(c, "#3a3d46"))
+		}
+		parts = append(parts, `<div style="margin:8px 0;"><strong>Tags:</strong> `+strings.Join(b, " ")+`</div>`)
 	}
 	return strings.Join(parts, "\n")
 }
@@ -133,8 +154,14 @@ func (a *App) GenerateFeed(releases []Release) error {
 		}
 		w("      <pubDate>" + xmlEsc(pub) + "</pubDate>\n")
 		w(`      <guid isPermaLink="true">` + xmlEsc(rel.Link) + "</guid>\n")
-		for _, c := range rel.Categories {
+		for _, c := range rel.Labels {
 			w("      <category>" + xmlEsc(c) + "</category>\n")
+		}
+		for _, c := range rel.Tags {
+			w("      <category>" + xmlEsc(c) + "</category>\n")
+		}
+		if rel.Engine != "" {
+			w("      <category>" + xmlEsc(rel.Engine) + "</category>\n")
 		}
 		body := xmlEsc(a.BuildDescription(rel, cfg))
 		w("      <description>" + body + "</description>\n")
@@ -162,9 +189,6 @@ func (a *App) GenerateFeed(releases []Release) error {
 	}
 	w("  </channel>\n</rss>\n")
 	if err := atomicWrite(a.store.rssFile, b.Bytes()); err != nil {
-		return err
-	}
-	if err := a.store.SaveReleases(releases); err != nil {
 		return err
 	}
 	a.log.Info("RSS saved: %s (%d items)", a.store.rssFile, len(releases))

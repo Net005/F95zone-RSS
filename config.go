@@ -13,11 +13,20 @@ import (
 )
 
 const (
-	appVersion       = "5.0.0"
+	appVersion       = "6.0.0"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
 	defaultUA        = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+	// defaultBackfillTemplate is the Angular "latest alpha" listing (not the plain RSS endpoint,
+	// which has no paging). It's a client-rendered page, so backfill always uses the headless
+	// browser to load it. "%d" is replaced with the page number.
+	defaultBackfillTemplate = f95BaseURL + "/sam/latest_alpha/#/cat=games/page=%d"
+
+	// parserVersion is bumped whenever enrichment extraction logic changes (tag/engine/version
+	// parsing, spoiler handling, ...). Rows enriched by an older parser are always re-scraped once,
+	// regardless of reuse_unchanged, so an upgrade like this one corrects existing history.
+	parserVersion = 2
 )
 
 // Config mirrors the original settings.json keys and adds a few new ones.
@@ -35,21 +44,39 @@ type Config struct {
 	RunOnStart       bool    `json:"run_on_start"`
 	SchedulerEnabled bool    `json:"scheduler_enabled"`
 	ReuseUnchanged   bool    `json:"reuse_unchanged"`
+
+	// SiteCookie: raw "Cookie:" header value copied from a logged-in browser session
+	// (e.g. "xf_user=...; xf_session=..."). Used for both HTTP and browser fetch modes so
+	// enrichment and backfill see the same content a logged-in member would.
+	SiteCookie string `json:"site_cookie"`
+
+	BackfillURLTemplate string `json:"backfill_url_template"`
+
+	NotifyNew    bool `json:"notify_new"`
+	NotifyUpdate bool `json:"notify_update"`
+
+	PushoverEnabled  bool   `json:"pushover_enabled"`
+	PushoverUserKey  string `json:"pushover_user_key"`
+	PushoverAPIToken string `json:"pushover_api_token"`
+	PushoverPriority int    `json:"pushover_priority"` // -2..2, Pushover's own range
 }
 
 func defaultConfig() Config {
 	return Config{
-		ScheduleHours:    12,
-		RSSSource:        defaultRSSSource,
-		MaxImages:        8,
-		RateLimitMS:      800,
-		CacheTTLHours:    2,
-		PublicBaseURL:    "https://f95-rss.bondt.network",
-		FetchMode:        "http",
-		UserAgent:        defaultUA,
-		RunOnStart:       true,
-		SchedulerEnabled: true,
-		ReuseUnchanged:   true,
+		ScheduleHours:       12,
+		RSSSource:           defaultRSSSource,
+		MaxImages:           8,
+		RateLimitMS:         800,
+		CacheTTLHours:       2,
+		PublicBaseURL:       "https://f95-rss.bondt.network",
+		FetchMode:           "http",
+		UserAgent:           defaultUA,
+		RunOnStart:          true,
+		SchedulerEnabled:    true,
+		ReuseUnchanged:      true,
+		BackfillURLTemplate: defaultBackfillTemplate,
+		NotifyNew:           true,
+		NotifyUpdate:        true,
 	}
 }
 
@@ -81,6 +108,19 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.UserAgent) == "" {
 		c.UserAgent = defaultUA
+	}
+	c.SiteCookie = strings.TrimSpace(c.SiteCookie)
+	if strings.TrimSpace(c.BackfillURLTemplate) == "" {
+		c.BackfillURLTemplate = defaultBackfillTemplate
+	}
+	if !strings.Contains(c.BackfillURLTemplate, "%d") {
+		return errors.New("backfill_url_template must contain a %d page placeholder")
+	}
+	if c.PushoverPriority < -2 || c.PushoverPriority > 2 {
+		return errors.New("pushover_priority must be between -2 and 2")
+	}
+	if c.PushoverEnabled && (strings.TrimSpace(c.PushoverUserKey) == "" || strings.TrimSpace(c.PushoverAPIToken) == "") {
+		return errors.New("pushover_user_key and pushover_api_token are required when Pushover is enabled")
 	}
 	return nil
 }
@@ -155,15 +195,4 @@ func (cs *ConfigStore) Set(c Config) error {
 func (cs *ConfigStore) save() error {
 	b, _ := json.Marshal(cs.cfg)
 	return cs.db.SetSetting(cfgKey, string(b))
-}
-
-func atomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
 }

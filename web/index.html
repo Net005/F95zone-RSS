@@ -20,8 +20,9 @@
   </div>
   <nav class="wrap tabs" id="tabs">
     <a href="#/dashboard" data-v="dashboard">Dashboard</a>
-    <a href="#/log" data-v="log">Live Log</a>
     <a href="#/releases" data-v="releases">Releases</a>
+    <a href="#/notifications" data-v="notifications">Notifications <span class="badge" id="notifBadge" hidden></span></a>
+    <a href="#/log" data-v="log">Live Log</a>
     <a href="#/runs" data-v="runs">Run History</a>
     <a href="#/feed" data-v="feed">Feed</a>
     <a href="#/settings" data-v="settings">Settings</a>
@@ -62,11 +63,65 @@
         <div class="btnrow wrap-btn">
           <button class="btn" id="btnRebuild">Rebuild feed from cache</button>
           <button class="btn" id="btnPurge">Purge orphaned images</button>
-          <button class="btn danger" id="btnClearCache">Clear release cache</button>
+          <button class="btn danger" id="btnClearCache">Clear release history</button>
+        </div>
+        <div class="hr"></div>
+        <label class="lbl">Backfill older releases <small>(harvests the listing pages, then enriches anything new)</small></label>
+        <div class="copyrow">
+          <input class="in" id="bfPages" type="number" min="1" max="200" value="5" style="max-width:90px">
+          <span class="muted small">page(s)</span>
+          <span class="spacer"></span>
+          <button class="btn" id="btnBackfill">Start backfill</button>
         </div>
       </div>
     </div>
   </div>
+</section>
+
+<!-- Releases -->
+<section id="v-releases" class="view">
+  <div class="toolbar sticky">
+    <input id="relSearch" class="in grow" placeholder="Search titles...">
+    <select id="relEngine" class="in"><option value="">All engines</option></select>
+    <select id="relSort" class="in">
+      <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
+      <option value="recent">Recently checked</option><option value="title">Title A-Z</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="relFailed"> Failed only</label>
+  </div>
+  <div class="toolbar tagbar">
+    <div class="tagpicker">
+      <button type="button" class="btn sm" id="tagPickerBtn">Tags &#9662;</button>
+      <div class="tagpanel" id="tagPanel" hidden>
+        <input class="in sm" id="tagPanelSearch" placeholder="Filter tags...">
+        <div class="tagoptions" id="tagOptions"></div>
+      </div>
+    </div>
+    <div class="chips" id="tagChips"></div>
+    <span class="spacer"></span>
+    <select class="in sm" id="filterSets"><option value="">Saved filters...</option></select>
+    <button class="btn sm" id="saveFilterBtn">Save current</button>
+    <button class="btn sm ghost" id="clearFilterBtn">Clear</button>
+  </div>
+  <div class="toolbar">
+    <span class="muted small" id="relCount"></span>
+    <span class="spacer"></span>
+    <div class="pager" id="pagerTop"></div>
+  </div>
+  <div class="tiles" id="relGrid"></div>
+  <div class="pager" id="pagerBottom"></div>
+</section>
+
+<!-- Notifications -->
+<section id="v-notifications" class="view">
+  <div class="toolbar sticky">
+    <label class="chk"><input type="checkbox" id="notifUnread"> Unread only</label>
+    <span class="spacer"></span>
+    <span class="muted small" id="notifCount"></span>
+    <button class="btn sm" id="notifMarkAll">Mark all read</button>
+    <button class="btn sm danger" id="notifClearAll">Clear all</button>
+  </div>
+  <div class="tiles" id="notifGrid"></div>
 </section>
 
 <!-- Live log -->
@@ -91,24 +146,10 @@
   </div>
 </section>
 
-<!-- Releases -->
-<section id="v-releases" class="view">
-  <div class="toolbar sticky">
-    <input id="relSearch" class="in grow" placeholder="Search titles...">
-    <select id="relTag" class="in"><option value="">All tags</option></select>
-    <select id="relSort" class="in">
-      <option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="title">Title A-Z</option>
-    </select>
-    <label class="chk"><input type="checkbox" id="relFailed"> Failed only</label>
-    <span class="muted small" id="relCount"></span>
-  </div>
-  <div class="tiles" id="relGrid"></div>
-</section>
-
 <!-- Run history -->
 <section id="v-runs" class="view">
   <div class="block">
-    <div class="block-h"><span>Run history</span><span class="muted small">last 100 runs</span></div>
+    <div class="block-h"><span>Run history</span><span class="muted small">last 200 runs</span></div>
     <div class="tablewrap"><table class="tbl" id="runsTbl"></table></div>
   </div>
 </section>
@@ -135,10 +176,10 @@
       <div class="block-h"><span>Endpoints</span></div>
       <div class="block-b">
         <table class="tbl compact">
-          <tr><td><code>/feed.xml</code></td><td>Enriched RSS feed (public)</td></tr>
-          <tr><td><code>/f95zone/images/&lt;file&gt;</code></td><td>Cached images (public)</td></tr>
-          <tr><td><code>/health</code></td><td>Plain-text status (public)</td></tr>
-          <tr><td><code>/</code></td><td>This control panel</td></tr>
+          <tr><td><code>/feed.xml</code></td><td>Enriched RSS feed (no login required)</td></tr>
+          <tr><td><code>/f95zone/images/&lt;file&gt;</code></td><td>Cached images (no login required)</td></tr>
+          <tr><td><code>/health</code></td><td>Plain-text status (no login required)</td></tr>
+          <tr><td><code>/</code></td><td>This control panel (sign-in required)</td></tr>
         </table>
         <p class="muted small" style="margin-top:12px">Tip: only expose <code>/feed.xml</code>, <code>/f95zone/images/*</code> and <code>/health</code> through your reverse proxy; keep the panel on your LAN.</p>
       </div>
@@ -154,6 +195,7 @@
       <fieldset><legend>Source</legend>
         <label class="lbl">Source RSS URL<input class="in" name="rss_source"></label>
         <label class="lbl">Public base URL <small>(used in feed links)</small><input class="in" name="public_base_url"></label>
+        <label class="lbl">Backfill listing URL template <small>(%d is the page number)</small><input class="in" name="backfill_url_template"></label>
       </fieldset>
       <fieldset><legend>Schedule &amp; cache</legend>
         <div class="grid g3">
@@ -173,6 +215,20 @@
           <label class="lbl">Chromium path <small>(optional)</small><input class="in" name="chrome_path" placeholder="auto-detect"></label>
         </div>
         <label class="lbl">User-Agent<input class="in" name="user_agent"></label>
+        <label class="lbl">Site session cookie <small>(paste the Cookie header from a logged-in browser tab, e.g. xf_user=...; xf_session=...)</small>
+          <textarea class="in" name="site_cookie" rows="2" placeholder="xf_user=...; xf_session=..."></textarea></label>
+        <p class="muted small">Used for enrichment and backfill so the scraper sees what your account sees (spoilers/galleries some threads gate behind login). Never shared anywhere else.</p>
+      </fieldset>
+      <fieldset><legend>Notifications</legend>
+        <label class="chk"><input type="checkbox" name="notify_new"> Notify on new releases</label>
+        <label class="chk"><input type="checkbox" name="notify_update"> Notify on version changes</label>
+        <label class="chk"><input type="checkbox" name="pushover_enabled"> Send Pushover notifications</label>
+        <div class="grid g3">
+          <label class="lbl">Pushover user key<input class="in" name="pushover_user_key"></label>
+          <label class="lbl">Pushover API token<input class="in" name="pushover_api_token"></label>
+          <label class="lbl">Priority (-2..2)<input class="in" type="number" min="-2" max="2" name="pushover_priority"></label>
+        </div>
+        <div class="btnrow"><button class="btn" type="button" id="btnPushoverTest">Send test notification</button><span id="pushMsg" class="small"></span></div>
       </fieldset>
       <div class="btnrow"><button class="btn primary" type="submit">Save settings</button><button class="btn" type="button" id="cfgReset">Reset form</button><span id="cfgMsg" class="small"></span></div>
     </div>
@@ -193,12 +249,17 @@
 </section>
 </main>
 
-<!-- release modal -->
+<!-- release / notification modal -->
 <div class="modal" id="modal" hidden>
   <div class="modal-box">
     <div class="modal-h"><span id="mTitle"></span><button class="x" id="mClose">&times;</button></div>
     <div class="modal-b" id="mBody"></div>
   </div>
+</div>
+<!-- screenshot lightbox -->
+<div class="lightbox" id="lightbox" hidden>
+  <button class="lbx" id="lbClose">&times;</button>
+  <img id="lightboxImg" src="" alt="">
 </div>
 <div class="toasts" id="toasts"></div>
 <script src="/ui/app.js"></script>

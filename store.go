@@ -14,26 +14,9 @@ import (
 	"time"
 )
 
-// Release keeps the same JSON field names as the Python cache, so an existing
-// releases_cache.json is picked up as-is.
-type Release struct {
-	Title             string   `json:"title"`
-	Link              string   `json:"link"`
-	PubDateRaw        string   `json:"pub_date_raw"`
-	PubDateISO        string   `json:"pub_date_iso"`
-	SourceDescription string   `json:"source_description"`
-	Categories        []string `json:"categories"`
-	ExtraDescription  string   `json:"extra_description"`
-	Genres            []string `json:"genres"`
-	ImageURLs         []string `json:"image_urls"`
-	HeaderImage       string   `json:"header_image"`
-	EnrichedAt        string   `json:"enriched_at,omitempty"`
-	EnrichError       string   `json:"enrich_error,omitempty"`
-}
-
 type RunRecord struct {
 	ID        int       `json:"id"`
-	Trigger   string    `json:"trigger"` // startup, schedule, manual, cache
+	Trigger   string    `json:"trigger"` // startup, schedule, manual, cache, backfill
 	Status    string    `json:"status"`  // ok, error, cancelled, cache
 	Started   time.Time `json:"started"`
 	Finished  time.Time `json:"finished"`
@@ -43,36 +26,38 @@ type RunRecord struct {
 	Reused    int       `json:"reused"`
 	Failed    int       `json:"failed"`
 	ImagesNew int       `json:"images_new"`
+	New       int       `json:"new_releases"`
+	Updated   int       `json:"updated_releases"`
 	Error     string    `json:"error,omitempty"`
 }
 
+// Store holds everything that isn't in the SQLite database: the image cache on
+// disk, its manifest, and run history. Release data itself lives in DB.
 type Store struct {
+	db *DB
+
 	dir         string
 	imagesDir   string
-	cacheFile   string
 	rssFile     string
 	manifest    string
 	historyFile string
 
-	mu       sync.RWMutex
-	releases []Release
-	mmu      sync.Mutex
-	man      map[string]map[string]string
-	hmu      sync.Mutex
-	history  []RunRecord
+	mmu     sync.Mutex
+	man     map[string]map[string]string
+	hmu     sync.Mutex
+	history []RunRecord
 }
 
-func NewStore(dataDir string) *Store {
+func NewStore(db *DB, dataDir string) *Store {
 	s := &Store{
+		db:          db,
 		dir:         dataDir,
 		imagesDir:   filepath.Join(dataDir, "images"),
-		cacheFile:   filepath.Join(dataDir, "releases_cache.json"),
 		rssFile:     filepath.Join(dataDir, "feed.xml"),
 		manifest:    filepath.Join(dataDir, "images_manifest.json"),
 		historyFile: filepath.Join(dataDir, "runs.json"),
 	}
 	os.MkdirAll(s.imagesDir, 0o755)
-	s.loadCache()
 	s.loadManifest()
 	if b, err := os.ReadFile(s.historyFile); err == nil {
 		json.Unmarshal(b, &s.history)
@@ -80,90 +65,69 @@ func NewStore(dataDir string) *Store {
 	return s
 }
 
-func (s *Store) loadCache() {
-	b, err := os.ReadFile(s.cacheFile)
+// ImportLegacyCache imports a Python-era releases_cache.json (or an earlier Go
+// version's) into the database once, on startup, and renames it aside.
+func (s *Store) ImportLegacyCache(path string, log *LogHub) {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
-	var r []Release
-	if json.Unmarshal(b, &r) == nil {
-		s.releases = r
+	var legacy []map[string]any
+	if json.Unmarshal(b, &legacy) != nil || len(legacy) == 0 {
+		return
 	}
-}
-
-func (s *Store) Releases() []Release {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]Release, len(s.releases))
-	copy(out, s.releases)
-	return out
-}
-
-func (s *Store) Find(link string) (Release, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, r := range s.releases {
-		if r.Link == link {
-			return r, true
+	n := 0
+	for _, m := range legacy {
+		r := Release{
+			Link:              str(m["link"]),
+			Title:             str(m["title"]),
+			PubDateRaw:        str(m["pub_date_raw"]),
+			PubDateISO:        str(m["pub_date_iso"]),
+			SourceDescription: str(m["source_description"]),
+			ExtraDescription:  str(m["extra_description"]),
+			ImageURLs:         strArr(m["image_urls"]),
+			HeaderImage:       str(m["header_image"]),
+			EnrichedAt:        str(m["enriched_at"]),
+			EnrichError:       str(m["enrich_error"]),
+			ParserVer:         0, // force one re-scrape under the new parser
+		}
+		if r.Link == "" {
+			continue
+		}
+		// The old "categories" field mixed status labels, engine names and the
+		// raw version bracket together (that's the bug this release fixes), so
+		// it's discarded rather than merged in. Labels/engine/version are
+		// re-derived from the title, and Tags (Genre) arrive on the next
+		// enrichment pass since parser_ver=0 forces a re-scrape.
+		r.Labels, r.Engine, r.Version = parseTitleBrackets(r.Title)
+		if err := s.db.UpsertRelease(r, "legacy-import"); err == nil {
+			n++
 		}
 	}
-	return Release{}, false
-}
-
-func (s *Store) SaveReleases(r []Release) error {
-	s.mu.Lock()
-	s.releases = r
-	s.mu.Unlock()
-	b, _ := json.MarshalIndent(r, "", "  ")
-	return atomicWrite(s.cacheFile, b)
-}
-
-func (s *Store) ClearCache() {
-	s.mu.Lock()
-	s.releases = nil
-	s.mu.Unlock()
-	os.Remove(s.cacheFile)
-}
-
-func (s *Store) CacheInfo() (mtime time.Time, ok bool) {
-	st, err := os.Stat(s.cacheFile)
-	if err != nil {
-		return time.Time{}, false
+	dst := path + ".imported"
+	if _, err := os.Stat(dst); err == nil {
+		dst = path + ".imported." + time.Now().UTC().Format("20060102150405")
 	}
-	return st.ModTime(), true
-}
-
-func (s *Store) CacheFresh(ttlHours float64) bool {
-	m, ok := s.CacheInfo()
-	if !ok || ttlHours <= 0 {
-		return false
-	}
-	return time.Since(m) < time.Duration(ttlHours*float64(time.Hour))
-}
-
-// ── image manifest ──
-
-func (s *Store) loadManifest() {
-	s.man = map[string]map[string]string{}
-	if b, err := os.ReadFile(s.manifest); err == nil {
-		json.Unmarshal(b, &s.man)
+	if err := os.Rename(path, dst); err != nil {
+		log.Warn("Legacy release cache imported (%d items) but %s could not be renamed: %v", n, path, err)
+	} else {
+		log.Info("Imported %d releases from legacy cache %s (renamed to %s). They'll be re-scraped once to pick up correct tags/engine/version.", n, path, filepath.Base(dst))
 	}
 }
 
-func (s *Store) AddManifest(thread, key, fname string) {
-	s.mmu.Lock()
-	defer s.mmu.Unlock()
-	if s.man[thread] == nil {
-		s.man[thread] = map[string]string{}
-	}
-	s.man[thread][key] = fname
+func str(v any) string {
+	s, _ := v.(string)
+	return s
 }
-
-func (s *Store) SaveManifest() {
-	s.mmu.Lock()
-	b, _ := json.MarshalIndent(s.man, "", "  ")
-	s.mmu.Unlock()
-	atomicWrite(s.manifest, b)
+func strArr(v any) []string {
+	a, _ := v.([]any)
+	out := make([]string, 0, len(a))
+	for _, x := range a {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // ── image helpers (filenames match the Python implementation) ──
@@ -197,6 +161,13 @@ func (s *Store) ImageExists(fname string) bool {
 	return err == nil
 }
 
+func (s *Store) imageSize(name string) int64 {
+	if st, err := os.Stat(filepath.Join(s.imagesDir, name)); err == nil {
+		return st.Size()
+	}
+	return 0
+}
+
 type ImageStats struct {
 	Count    int   `json:"count"`
 	Bytes    int64 `json:"bytes"`
@@ -204,10 +175,14 @@ type ImageStats struct {
 	OrphanSz int64 `json:"orphan_bytes"`
 }
 
-// referenced returns every image filename the current cache points at.
+// referenced returns every image filename any release (of any age) points at.
 func (s *Store) referenced() map[string]bool {
 	ref := map[string]bool{}
-	for _, r := range s.Releases() {
+	page, err := s.db.QueryReleases(ReleaseFilter{PageSize: 1_000_000, Page: 1})
+	if err != nil {
+		return ref
+	}
+	for _, r := range page.Items {
 		if r.HeaderImage != "" {
 			ref[imgFilename(hqURL(r.HeaderImage))] = true
 		}
@@ -256,12 +231,8 @@ func (s *Store) PurgeOrphans() (int, int64) {
 			}
 		}
 	}
-	// prune manifest entries for threads no longer cached
 	s.mmu.Lock()
-	links := map[string]bool{}
-	for _, r := range s.Releases() {
-		links[r.Link] = true
-	}
+	links := s.db.AllLinks()
 	for k := range s.man {
 		if !links[k] {
 			delete(s.man, k)
@@ -270,6 +241,29 @@ func (s *Store) PurgeOrphans() (int, int64) {
 	s.mmu.Unlock()
 	s.SaveManifest()
 	return n, sz
+}
+
+func (s *Store) loadManifest() {
+	s.man = map[string]map[string]string{}
+	if b, err := os.ReadFile(s.manifest); err == nil {
+		json.Unmarshal(b, &s.man)
+	}
+}
+
+func (s *Store) AddManifest(thread, key, fname string) {
+	s.mmu.Lock()
+	defer s.mmu.Unlock()
+	if s.man[thread] == nil {
+		s.man[thread] = map[string]string{}
+	}
+	s.man[thread][key] = fname
+}
+
+func (s *Store) SaveManifest() {
+	s.mmu.Lock()
+	b, _ := json.MarshalIndent(s.man, "", "  ")
+	s.mmu.Unlock()
+	atomicWrite(s.manifest, b)
 }
 
 // ── run history ──
@@ -285,8 +279,8 @@ func (s *Store) AddRun(r RunRecord) {
 	}
 	r.ID = next
 	s.history = append(s.history, r)
-	if len(s.history) > 100 {
-		s.history = s.history[len(s.history)-100:]
+	if len(s.history) > 200 {
+		s.history = s.history[len(s.history)-200:]
 	}
 	b, _ := json.MarshalIndent(s.history, "", "  ")
 	atomicWrite(s.historyFile, b)
@@ -301,9 +295,13 @@ func (s *Store) History() []RunRecord {
 	return out
 }
 
-func (s *Store) imageSize(name string) int64 {
-	if st, err := os.Stat(filepath.Join(s.imagesDir, name)); err == nil {
-		return st.Size()
+func atomicWrite(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
-	return 0
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
