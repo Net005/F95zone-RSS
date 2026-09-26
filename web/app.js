@@ -296,11 +296,12 @@ let relLoading = false;
 let relScrollObserver;
 
 function tileHTML(x) {
+  const pending = !x.cover && !x.error && !x.desc_len;
   return `
     <div class="tile" data-link="${esc(x.link)}" data-cover="${esc(x.cover || '')}">
-      <div class="cv" style="${x.cover ? `background-image:url('${esc(x.cover)}')` : ''}">
+      <div class="cv${pending ? ' no-cover' : ''}" style="${x.cover ? `background-image:url('${esc(x.cover)}')` : ''}">
         <button type="button" class="watch${x.watched ? ' on' : ''}" data-watch="${esc(x.link)}" title="${x.watched ? 'Stop monitoring' : 'Monitor for updates'}">${x.watched ? '★' : '☆'}</button>
-        ${x.error ? '<span class="bad">FAILED</span>' : ''}${x.images ? `<span class="n">${x.images} img</span>` : ''}
+        ${x.error ? '<span class="bad">FAILED</span>' : ''}${x.images ? `<span class="n">${x.images} img</span>` : ''}${pending ? '<span class="pending">Awaiting enrichment</span>' : ''}
       </div>
       <div class="tb"><div class="tt">${esc(x.title.replace(/^(\[[^\]]*\]\s*)+/, '') || x.title)}</div>
       <div class="tm">${x.labels.map(labelHTML).join('')}${engineHTML(x.engine)}${versionHTML(x.version)}<div>${humanAgo(x.pub)}</div></div></div>

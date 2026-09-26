@@ -119,6 +119,8 @@ legend{padding:0 8px;color:var(--accent);font-weight:700;font-size:13px;text-tra
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;cursor:pointer;display:flex;flex-direction:column;transition:transform .12s,border-color .12s}
 .tile:hover{transform:translateY(-2px);border-color:var(--accent)}
 .tile .cv{aspect-ratio:var(--tile-aspect,16/10);background:#0c0c0c center/contain no-repeat;position:relative}
+.tile .cv.no-cover{background:repeating-linear-gradient(135deg,#111 0 14px,#0c0c0c 14px 28px)}
+.tile .cv.no-cover .pending{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 10%;color:var(--muted);font-size:11px;letter-spacing:.04em;text-transform:uppercase}
 .tile .cv .n{position:absolute;right:6px;bottom:6px;background:rgba(0,0,0,.75);font-size:12px;padding:1px 6px;border-radius:3px}
 .tile .cv .bad{position:absolute;left:6px;top:6px;background:var(--err);font-size:11px;font-weight:700;padding:1px 6px;border-radius:3px}
 .tile .tb{padding:9px 11px}
