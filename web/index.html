@@ -77,6 +77,7 @@
           <button class="btn" id="btnBackfill">Start backfill</button>
         </div>
         <div class="muted small" style="margin-top:4px">Resuming an interrupted backfill? Set "from page" to just past where the log last got to - a restart doesn't remember where it left off, and starting over at page 1 just re-walks pages it already knows.</div>
+        <label class="chk" style="margin-top:6px"><input type="checkbox" id="bfIgnoreEarlyStop"> Don't stop early on empty pages <small>(walk every page up to the count above, even through long already-known stretches - otherwise a run quits after 40 pages in a row with nothing new)</small></label>
       </div>
     </div>
   </div>

@@ -5,8 +5,10 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -116,11 +118,25 @@ func (s *Server) coverURL(r Release) string {
 	if h == "" {
 		return ""
 	}
-	h = hqURL(h)
-	if n := imgFilename(h); s.app.store.ImageExists(n) {
+	return s.imageProxyURL(hqURL(h))
+}
+
+// imageProxyURL always points the browser at our own /f95zone/images/ route,
+// never at the raw F95zone attachment URL directly. F95zone's attachments
+// CDN returns 402 Payment Required to any request carrying a foreign
+// Referer - which every browser sends when loading a cross-origin
+// <img>/background-image - so hotlinking it straight from the page (the old
+// behavior whenever an image hadn't been downloaded yet) reliably failed and
+// rendered as a blank tile. When the image is already cached this is just
+// the local path; when it isn't, ?src lets the handler fetch and cache it on
+// first request instead of being broken until the next scheduled/backfill
+// run happens to download it.
+func (s *Server) imageProxyURL(h string) string {
+	n := imgFilename(h)
+	if s.app.store.ImageExists(n) {
 		return "/f95zone/images/" + n
 	}
-	return h
+	return "/f95zone/images/" + n + "?src=" + url.QueryEscape(h)
 }
 
 // ── public endpoints ──
@@ -139,14 +155,58 @@ func (s *Server) image(w http.ResponseWriter, r *http.Request) {
 	name := filepath.Base(r.PathValue("file"))
 	p := filepath.Join(s.app.store.imagesDir, name)
 	if _, err := os.Stat(p); err != nil {
-		http.NotFound(w, r)
-		return
+		if !s.fetchImageOnDemand(r, name, p) {
+			http.NotFound(w, r)
+			return
+		}
 	}
-	if m, ok := mimeMap[strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))]; ok {
-		w.Header().Set("Content-Type", m)
-	}
+	// The origin's declared Content-Type can't be trusted from the URL's own
+	// extension alone: F95zone serves at least some attachments (seen on a
+	// live thread) as image/avif despite a ".png" URL, which - combined with
+	// a Content-Type we derive from that same wrong extension - is exactly
+	// the kind of mismatch that leaves a background-image tile blank in some
+	// browsers. Sniff the actual bytes instead of trusting the filename.
+	w.Header().Set("Content-Type", detectImageContentType(p, name))
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.ServeFile(w, r, p)
+}
+
+// fetchImageOnDemand serves as the self-healing path for a cover/gallery
+// image that was never downloaded during enrichment (e.g. a run that got
+// interrupted between enriching a release and downloading its images still
+// saves that release with valid HeaderImage/ImageURLs - just no cached file
+// on disk yet). ?src carries the original URL; it's only trusted when it
+// hashes to the exact filename being requested, so this can't be used to
+// make the server fetch/cache an arbitrary attacker-supplied URL.
+func (s *Server) fetchImageOnDemand(r *http.Request, name, destPath string) bool {
+	src := r.URL.Query().Get("src")
+	if src == "" || imgFilename(src) != name || !strings.HasPrefix(src, "http") {
+		return false
+	}
+	cfg := s.app.cfg.Get()
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", src, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", cfg.UserAgent)
+	if cfg.SiteCookie != "" {
+		req.Header.Set("Cookie", cfg.SiteCookie)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return false
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil || len(b) == 0 {
+		return false
+	}
+	return atomicWrite(destPath, b) == nil
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -289,12 +349,7 @@ func (s *Server) releaseDetail(w http.ResponseWriter, r *http.Request) {
 	pv.PublicBaseURL = ""
 	imgs := []string{}
 	for _, u := range rel.ImageURLs {
-		u = hqURL(u)
-		if n := imgFilename(u); s.app.store.ImageExists(n) {
-			imgs = append(imgs, "/f95zone/images/"+n)
-		} else {
-			imgs = append(imgs, u)
-		}
+		imgs = append(imgs, s.imageProxyURL(hqURL(u)))
 	}
 	writeJSON(w, 200, map[string]any{
 		"release": rel, "cover": s.coverURL(rel), "images": imgs,
@@ -437,8 +492,9 @@ func (s *Server) purge(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) backfill(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Pages     int `json:"pages"`
-		StartPage int `json:"start_page"`
+		Pages           int  `json:"pages"`
+		StartPage       int  `json:"start_page"`
+		IgnoreEarlyStop bool `json:"ignore_early_stop"`
 	}
 	readBody(r, &b)
 	if b.Pages < 1 {
@@ -447,7 +503,7 @@ func (s *Server) backfill(w http.ResponseWriter, r *http.Request) {
 	if b.StartPage < 1 {
 		b.StartPage = 1
 	}
-	if err := s.app.StartBackfill(b.Pages, b.StartPage); err != nil {
+	if err := s.app.StartBackfill(b.Pages, b.StartPage, b.IgnoreEarlyStop); err != nil {
 		writeErr(w, 409, err)
 		return
 	}

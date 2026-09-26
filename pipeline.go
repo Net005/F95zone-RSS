@@ -684,7 +684,7 @@ func (a *App) fetchListingItems(ctx context.Context, cfg Config, pages int) ([]R
 	return out, nil
 }
 
-func (a *App) StartBackfill(pages, startPage int) error {
+func (a *App) StartBackfill(pages, startPage int, ignoreEarlyStop bool) error {
 	if pages < 1 {
 		pages = 1
 	}
@@ -701,7 +701,7 @@ func (a *App) StartBackfill(pages, startPage int) error {
 	if err != nil {
 		return err
 	}
-	go a.runBackfill(ctx, pages, startPage)
+	go a.runBackfill(ctx, pages, startPage, ignoreEarlyStop)
 	return nil
 }
 
@@ -716,7 +716,7 @@ func (a *App) StartBackfill(pages, startPage int) error {
 // otherwise every already-known page in between counts toward the
 // consecutive-empty-page early stop below and can end the run before it
 // ever reaches fresh territory again.
-func (a *App) runBackfill(ctx context.Context, pages, startPage int) {
+func (a *App) runBackfill(ctx context.Context, pages, startPage int, ignoreEarlyStop bool) {
 	cfg := a.cfg.Get()
 	rec := RunRecord{Trigger: "backfill", Started: time.Now()}
 	finish := func(status, errMsg string) {
@@ -792,7 +792,7 @@ func (a *App) runBackfill(ctx context.Context, pages, startPage int) {
 		// empty pages (as this used to) cut runs short at page 4 of 900+. Require a
 		// much longer empty streak before giving up early.
 		const consecutiveEmptyLimit = 40
-		if consecutiveEmpty >= consecutiveEmptyLimit {
+		if !ignoreEarlyStop && consecutiveEmpty >= consecutiveEmptyLimit {
 			a.log.Info("Backfill: %d pages in a row with nothing new, stopping early", consecutiveEmptyLimit)
 			break
 		}

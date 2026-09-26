@@ -330,7 +330,7 @@ func firstNonEmpty(v ...string) string {
 
 var (
 	overviewRe = regexp.MustCompile(`(?i)<b[^>]*>\s*Overview\s*</b>\s*:?\s*`)
-	nextSecRe  = regexp.MustCompile(`(?i)<b[^>]*>\s*(?:Installation|Thread\s*Updated|Developer|Publisher|Censorship|Censored|Version|OS|Language|Store|Genre|Length|Notes?|Changelog|Downloads?|Links?)\s*[:</]`)
+	nextSecRe  = regexp.MustCompile(`(?i)<b[^>]*>\s*(?:Installation|Thread\s*Updated|Developer|Publisher|Censorship|Censored|Version|OS|Language|Store|Genre|Length|Notes?|Changelog|Downloads?|Links?|Screenshots?)\s*[:</]`)
 	ovTextRe   = regexp.MustCompile(`(?i)^\s*Overview\s*:?\s*`)
 	skipImg    = []string{"avatar", "smilie", "emoji", "icon", "logo", "spinner", "loading", "styles", "thumbs", "ui-"}
 
@@ -431,8 +431,20 @@ func parseHeaderTags(doc *goquery.Document) []string {
 // every other field extraction collapses down to.
 var (
 	changelogFieldRe = regexp.MustCompile(`(?i)<b[^>]*>\s*Changelog\s*</b>\s*:?\s*`)
-	downloadsFieldRe = regexp.MustCompile(`(?i)<b[^>]*>\s*(?:Download|Downloads|Links?)\s*</b>\s*:?\s*`)
+	// Threads phrase this heading in more ways than a single word ("Download",
+	// "Download Link", "Download Links", "Links", ...), so match any of those
+	// combinations rather than one word alone.
+	downloadsFieldRe = regexp.MustCompile(`(?i)<b[^>]*>\s*(?:Download\s*Links?|Downloads?|Links?)\s*</b>\s*:?\s*`)
 	anchorRe         = regexp.MustCompile(`(?is)<a\b[^>]*\bhref="([^"]+)"[^>]*>(.*?)</a>`)
+	// downloadHostRe is the fallback used when a thread has no recognizable
+	// "Download(s)/Links" heading at all: a handful of link texts that are
+	// almost always an actual file host rather than prose, used to recover
+	// download links from a post whose heading extraction otherwise misses.
+	downloadHostRe = regexp.MustCompile(`(?i)^(mega|pixeldrain|gofile|mixdrop|workupload|katfile|datanodes|buzzheavier|vikingfile|anonfiles|mediafire|gdrive|google\s*drive|dropbox|uploadhaven|rapidgator|filecrypt|streamtape|1fichier|racaty)$`)
+	// downloadSkipHrefRe excludes screenshot/attachment links that end up
+	// inside (or, absent a following heading, past the end of) a Downloads
+	// section - those are images, never an actual release download.
+	downloadSkipHrefRe = regexp.MustCompile(`(?i)attachments\.f95zone\.to|\.(?:jpe?g|png|gif|webp|bmp|svg)(?:\?.*)?$`)
 )
 
 // extractChangelog pulls the "Changelog:" section as its own field, same
@@ -462,27 +474,35 @@ func extractChangelog(inner string) string {
 // not a download).
 func extractDownloadLinks(inner string) []DownloadLink {
 	m := downloadsFieldRe.FindStringIndex(inner)
-	if m == nil {
-		return nil
+	var seg string
+	if m != nil {
+		rest := inner[m[1]:]
+		end := len(rest)
+		if n := nextSecRe.FindStringIndex(rest); n != nil {
+			end = n[0]
+		}
+		seg = rest[:end]
+	} else {
+		// No "Download(s)/Links" heading found at all - fall back to
+		// scanning the whole post for anchors whose own text names a known
+		// file host, rather than showing no downloads for that release.
+		seg = inner
 	}
-	rest := inner[m[1]:]
-	end := len(rest)
-	if n := nextSecRe.FindStringIndex(rest); n != nil {
-		end = n[0]
-	}
-	seg := rest[:end]
 	seen := map[string]bool{}
 	var out []DownloadLink
 	for _, mm := range anchorRe.FindAllStringSubmatch(seg, -1) {
 		href := strings.TrimSpace(html.UnescapeString(mm[1]))
-		if !strings.HasPrefix(href, "http") || seen[href] {
+		if !strings.HasPrefix(href, "http") || seen[href] || downloadSkipHrefRe.MatchString(href) {
 			continue
 		}
-		seen[href] = true
-		text := stripGated(stripHTML(mm[2]))
+		text := strings.TrimSpace(stripGated(stripHTML(mm[2])))
+		if m == nil && !downloadHostRe.MatchString(text) {
+			continue
+		}
 		if text == "" {
 			text = href
 		}
+		seen[href] = true
 		out = append(out, DownloadLink{Host: text, URL: href})
 	}
 	return out

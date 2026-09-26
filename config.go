@@ -44,7 +44,7 @@ func normalizeSiteCookie(raw string) string {
 }
 
 const (
-	appVersion       = "6.5.8"
+	appVersion       = "6.5.9"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
@@ -68,7 +68,12 @@ const (
 	// v7 (6.5.6): thread_updated_iso is now populated on every enrichment so the default
 	// sort can reflect the thread's real last-update time (matching F95zone's own
 	// latest-alpha listing) instead of freezing on the release's original publish date.
-	parserVersion = 7
+	// v8 (6.5.9): Downloads extraction no longer sweeps up screenshot/attachment links,
+	// recognizes more heading phrasings ("Download Link(s)", not just one bare word), and
+	// falls back to scanning the whole post for known host names when no heading matches
+	// at all - bumped so releases that got an empty or image-polluted Downloads list under
+	// the old logic are re-scraped once.
+	parserVersion = 8
 )
 
 // Config mirrors the original settings.json keys and adds a few new ones.

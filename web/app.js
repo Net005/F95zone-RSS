@@ -127,7 +127,8 @@ $('#btnClearCache').onclick = () => { if (confirm('Clear the entire release hist
 $('#btnBackfill').onclick = () => {
   const pages = Math.max(1, Math.min(2000, Number($('#bfPages').value) || 5));
   const startPage = Math.max(1, Math.min(2000, Number($('#bfStartPage').value) || 1));
-  act(() => api('/api/backfill', { method: 'POST', body: { pages, start_page: startPage } }),
+  const ignoreEarlyStop = $('#bfIgnoreEarlyStop').checked;
+  act(() => api('/api/backfill', { method: 'POST', body: { pages, start_page: startPage, ignore_early_stop: ignoreEarlyStop } }),
     r => `Backfill started (page ${r.start_page} for ${r.pages} page(s)) - watch the live log`);
 };
 

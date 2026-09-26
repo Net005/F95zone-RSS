@@ -4,12 +4,46 @@ import (
 	"bytes"
 	"fmt"
 	"html"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 var mimeMap = map[string]string{
-	"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp",
+	"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp", "avif": "image/avif",
+}
+
+// detectImageContentType sniffs a cached image file's actual bytes rather
+// than trusting its extension. F95zone attachments have been seen served as
+// image/avif despite a ".png"-suffixed URL, and Go's http.DetectContentType
+// doesn't recognize AVIF's ISO-BMFF-based signature, so that case is checked
+// for explicitly before falling back to Go's own sniffer and finally to the
+// plain extension lookup.
+func detectImageContentType(path, name string) string {
+	f, err := os.Open(path)
+	if err == nil {
+		defer f.Close()
+		head := make([]byte, 32)
+		if n, _ := io.ReadFull(f, head); n > 0 {
+			head = head[:n]
+			if len(head) >= 12 && string(head[4:8]) == "ftyp" {
+				brand := string(head[8:12])
+				if brand == "avif" || brand == "avis" {
+					return "image/avif"
+				}
+			}
+			if ct := http.DetectContentType(head); ct != "application/octet-stream" && ct != "text/plain; charset=utf-8" {
+				return ct
+			}
+		}
+	}
+	if m, ok := mimeMap[strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))]; ok {
+		return m
+	}
+	return "application/octet-stream"
 }
 
 func xmlEsc(s string) string {
