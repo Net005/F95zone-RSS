@@ -103,6 +103,9 @@ func OpenDB(path string) (*DB, error) {
 	if err := db.migrateThreadUpdatedISOColumn(); err != nil {
 		return nil, err
 	}
+	if err := db.migrateValidateThreadUpdatedISO(); err != nil {
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -304,8 +307,67 @@ func (d *DB) migrateThreadUpdatedISOColumn() error {
 	if _, err := d.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_releases_thread_updated ON releases(thread_updated_iso DESC)`); err != nil {
 		return err
 	}
-	_, err = d.sql.Exec(`UPDATE releases SET thread_updated_iso = thread_updated || 'T00:00:00+00:00'
-		WHERE (thread_updated_iso IS NULL OR thread_updated_iso = '')
-		AND thread_updated GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'`)
-	return err
+	// Backfill in Go, not a blind SQL UPDATE - the original version of this
+	// used `thread_updated GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'`
+	// to pick rows shaped like a date, but GLOB only checks digit shape, not
+	// whether it's a real calendar date. A garbled OP field like "2026-60-27"
+	// (month 60) matches that shape fine and got written through as-is,
+	// which then sorted ahead of every legitimately-dated release under a
+	// plain text ORDER BY and rendered as "NaN days ago" client-side. Parsing
+	// each candidate for real before writing it (same check applied live in
+	// parseFieldDate) is the fix; migrateValidateThreadUpdatedISO below
+	// cleans up rows an earlier, buggy run of this migration already wrote.
+	rows2, err := d.sql.Query(`SELECT link, thread_updated FROM releases WHERE (thread_updated_iso IS NULL OR thread_updated_iso = '') AND thread_updated <> ''`)
+	if err != nil {
+		return err
+	}
+	type upd struct{ link, iso string }
+	var updates []upd
+	for rows2.Next() {
+		var link, raw string
+		if err := rows2.Scan(&link, &raw); err != nil {
+			rows2.Close()
+			return err
+		}
+		if t, err := time.Parse("2006-01-02", raw); err == nil {
+			updates = append(updates, upd{link, t.UTC().Format("2006-01-02T15:04:05-07:00")})
+		}
+	}
+	rows2.Close()
+	for _, u := range updates {
+		if _, err := d.sql.Exec(`UPDATE releases SET thread_updated_iso = ? WHERE link = ?`, u.iso, u.link); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateValidateThreadUpdatedISO clears any thread_updated_iso value that
+// isn't an actually-valid calendar date - specifically to clean up rows an
+// earlier, buggier version of migrateThreadUpdatedISOColumn already wrote
+// (see its comment). Cheap and idempotent: once a database is clean this
+// finds nothing to do on every subsequent startup.
+func (d *DB) migrateValidateThreadUpdatedISO() error {
+	rows, err := d.sql.Query(`SELECT link, thread_updated_iso FROM releases WHERE thread_updated_iso <> ''`)
+	if err != nil {
+		return err
+	}
+	var bad []string
+	for rows.Next() {
+		var link, iso string
+		if err := rows.Scan(&link, &iso); err != nil {
+			rows.Close()
+			return err
+		}
+		if _, err := time.Parse(time.RFC3339, iso); err != nil {
+			bad = append(bad, link)
+		}
+	}
+	rows.Close()
+	for _, link := range bad {
+		if _, err := d.sql.Exec(`UPDATE releases SET thread_updated_iso = '' WHERE link = ?`, link); err != nil {
+			return err
+		}
+	}
+	return nil
 }

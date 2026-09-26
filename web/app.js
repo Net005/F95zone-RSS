@@ -32,6 +32,7 @@ const clock = t => t ? new Date(t).toLocaleString([], { month: 'short', day: 'nu
 function humanAgo(t) {
   if (!t) return '-';
   const s = (Date.now() - new Date(t)) / 1000;
+  if (Number.isNaN(s)) return '-'; // an invalid/unparseable date string, not a real duration
   if (s < 0) return 'in the future';
   if (s < 5) return 'just now';
   if (s < 60) return Math.floor(s) + 's ago';
