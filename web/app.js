@@ -597,6 +597,10 @@ document.addEventListener('keydown', e => {
   if ($('#modal').hidden || !$('#changelogModal').hidden) return;
   if (e.key === 'j' || e.key === 'J') { e.preventDefault(); navigateRelease(1); }
   else if (e.key === 'k' || e.key === 'K') { e.preventDefault(); navigateRelease(-1); }
+  else if (e.key === 'v' || e.key === 'V' || e.key === 'b' || e.key === 'B') {
+    e.preventDefault();
+    if (currentRelLink) window.open(currentRelLink, '_blank', 'noopener,noreferrer');
+  }
 });
 
 // ── notifications ──
