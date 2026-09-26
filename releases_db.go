@@ -429,6 +429,30 @@ func (d *DB) AllLinks() map[string]bool {
 	return out
 }
 
+// AllImageRefs returns header_image and every image_urls_json entry across
+// every release with no pagination - used only for orphan-image detection,
+// where "give me literally everything" is the actual requirement (see the
+// comment on Store.referenced for why QueryReleases can't be reused here).
+func (d *DB) AllImageRefs() ([]string, error) {
+	rows, err := d.sql.Query(`SELECT header_image, image_urls_json FROM releases`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var header, imgs string
+		if err := rows.Scan(&header, &imgs); err != nil {
+			return nil, err
+		}
+		if header != "" {
+			out = append(out, header)
+		}
+		out = append(out, parseArr(imgs)...)
+	}
+	return out, rows.Err()
+}
+
 func (d *DB) DeleteAllReleases() error {
 	_, err := d.sql.Exec(`DELETE FROM releases`)
 	return err

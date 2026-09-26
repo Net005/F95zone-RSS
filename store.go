@@ -176,17 +176,24 @@ type ImageStats struct {
 }
 
 // referenced returns every image filename any release (of any age) points at.
+//
+// This used to go through QueryReleases(PageSize: 1_000_000) - but
+// QueryReleases silently clamps any page size over 200 down to 60 (it's
+// built for the paginated release grid, not a "give me everything" query),
+// so this was only ever seeing the newest 60 releases and treating every
+// other release's images as orphaned. On a database with more than a
+// couple hundred releases nearly everything on disk reads as "orphaned"
+// (and PurgeOrphans, which relies on this same set, would delete images
+// that are very much still in use). AllImageRefs bypasses that pagination
+// entirely with an unpaginated scan of just the two columns needed here.
 func (s *Store) referenced() map[string]bool {
 	ref := map[string]bool{}
-	page, err := s.db.QueryReleases(ReleaseFilter{PageSize: 1_000_000, Page: 1})
+	urls, err := s.db.AllImageRefs()
 	if err != nil {
 		return ref
 	}
-	for _, r := range page.Items {
-		if r.HeaderImage != "" {
-			ref[imgFilename(hqURL(r.HeaderImage))] = true
-		}
-		for _, u := range r.ImageURLs {
+	for _, u := range urls {
+		if u != "" {
 			ref[imgFilename(hqURL(u))] = true
 		}
 	}
