@@ -261,8 +261,15 @@ func (s *Server) releases(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]relSummary, len(res.Items))
 	for i, x := range res.Items {
+		// Same fallback the default sort uses: prefer the thread's actual last
+		// update time over the release's original (and never-updated) publish
+		// date, so the "X ago" shown on each card matches what it's sorted by.
+		pub := x.ThreadUpdatedISO
+		if pub == "" {
+			pub = x.PubDateISO
+		}
 		items[i] = relSummary{
-			Title: x.Title, Link: x.Link, Pub: x.PubDateISO, Labels: x.Labels, Tags: x.Tags, Engine: x.Engine, Version: x.Version,
+			Title: x.Title, Link: x.Link, Pub: pub, Labels: x.Labels, Tags: x.Tags, Engine: x.Engine, Version: x.Version,
 			Cover: s.coverURL(x), Images: len(x.ImageURLs), DescLen: len(x.ExtraDescription), Error: x.EnrichError, EnrichedAt: x.EnrichedAt,
 			Watched: x.Watched,
 		}

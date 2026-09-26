@@ -24,6 +24,27 @@ const fmtDur = s => { s = Math.round(s); if (s < 60) return s + 's'; if (s < 360
 const ago = t => { if (!t) return '-'; const s = (Date.now() - new Date(t)) / 1000; if (s < 0) return 'in ' + fmtDur(-s); if (s < 5) return 'just now'; return fmtDur(s) + ' ago'; };
 const inn = t => { if (!t) return '-'; const s = (new Date(t) - Date.now()) / 1000; return s <= 0 ? 'now' : 'in ' + fmtDur(s); };
 const clock = t => t ? new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-';
+// humanAgo: a friendlier "time since" for release cards - fmtDur/ago above
+// are fine for short technical durations (run times, cache age) but never
+// broke a duration down into days, so anything past 24h read as an
+// unreadable "100h 40m ago". This normalizes past a day into "N day(s)
+// [H hour(s)] ago" and otherwise reads the same as before.
+function humanAgo(t) {
+  if (!t) return '-';
+  const s = (Date.now() - new Date(t)) / 1000;
+  if (s < 0) return 'in the future';
+  if (s < 5) return 'just now';
+  if (s < 60) return Math.floor(s) + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return m ? `${h}h ${m}m ago` : `${h}h ago`;
+  }
+  const days = Math.floor(s / 86400), hours = Math.floor((s % 86400) / 3600);
+  const dPart = `${days} day${days === 1 ? '' : 's'}`;
+  const hPart = hours ? ` ${hours} hour${hours === 1 ? '' : 's'}` : '';
+  return `${dPart}${hPart} ago`;
+}
 
 // F95-style label colours (status badges from the title brackets)
 const LABELC = { UPDATE:'#c0392b', NEW:'#2e9e5b', Completed:'#1f7fb8', Abandoned:'#7a4a2a', Onhold:'#b8901f', SiteRip:'#555', Collection:'#6a6a2a', Poll:'#555', 'Cheat Mod':'#6a4a8a' };
@@ -278,7 +299,7 @@ function tileHTML(x) {
         ${x.error ? '<span class="bad">FAILED</span>' : ''}${x.images ? `<span class="n">${x.images} img</span>` : ''}
       </div>
       <div class="tb"><div class="tt">${esc(x.title.replace(/^(\[[^\]]*\]\s*)+/, '') || x.title)}</div>
-      <div class="tm">${x.labels.map(labelHTML).join('')}${engineHTML(x.engine)}${versionHTML(x.version)}<div>${ago(x.pub)}</div></div></div>
+      <div class="tm">${x.labels.map(labelHTML).join('')}${engineHTML(x.engine)}${versionHTML(x.version)}<div>${humanAgo(x.pub)}</div></div></div>
     </div>`;
 }
 
