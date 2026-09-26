@@ -54,8 +54,17 @@ func OpenDB(path string) (*DB, error) {
 			last_seen TEXT NOT NULL,
 			discovered_via TEXT NOT NULL DEFAULT 'feed')`,
 		`CREATE INDEX IF NOT EXISTS idx_releases_pub ON releases(pub_date_iso DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_releases_thread_updated ON releases(thread_updated_iso DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_releases_engine ON releases(engine)`,
+		// idx_releases_thread_updated is NOT created here: on an existing database
+		// (the common case - this only runs once per new install) the CREATE TABLE
+		// above is a no-op because the table already exists, so the column this
+		// index references doesn't exist until migrateThreadUpdatedISOColumn adds
+		// it further down. Creating the index here unconditionally broke every
+		// upgrade from a pre-6.5.6 database: this whole statement list runs before
+		// any migration, so "no such column: thread_updated_iso" failed here and
+		// OpenDB returned an error before ever reaching the migration that would
+		// have added it - the app couldn't even start. The index is created inside
+		// the migration itself instead, after the ALTER TABLE that adds the column.
 		`CREATE TABLE IF NOT EXISTS release_tags(
 			link TEXT NOT NULL REFERENCES releases(link) ON DELETE CASCADE,
 			tag TEXT NOT NULL,
