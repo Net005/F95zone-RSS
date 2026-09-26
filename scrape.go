@@ -802,7 +802,15 @@ func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Conf
 
 	fields := extractFields(inner)
 	r.ThreadUpdated = fields["thread updated"]
-	r.ThreadUpdatedISO = parseFieldDate(r.ThreadUpdated)
+	// Don't clobber ThreadUpdatedISO if the discovery step already set it from
+	// F95zone's own listing "ts" field (see fetchListingDataPage) - that's the
+	// exact value the live site sorts by, refreshed on every listing scan with
+	// no enrichment needed, whereas this OP-text field is only ever as fresh
+	// as the release's last enrichment and only has day granularity. Parsing
+	// it here is purely a fallback for whenever ts isn't available.
+	if r.ThreadUpdatedISO == "" {
+		r.ThreadUpdatedISO = parseFieldDate(r.ThreadUpdated)
+	}
 	r.ReleaseDate = fields["release date"]
 	// A release discovered straight off the listing pages (fetchListingItems /
 	// backfill) has no PubDate - that used to come from the F95zone source RSS
@@ -922,6 +930,15 @@ const listDataURLTemplate = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=
 type listDataItem struct {
 	ThreadID int    `json:"thread_id"`
 	Title    string `json:"title"`
+	// Ts is F95zone's own "last bumped" unix timestamp for this thread - it's
+	// exactly what the live latest_alpha page itself sorts by, refreshed on
+	// every listing fetch with no need to load the thread page at all. Using
+	// this instead of relying on parsing the OP's own "Thread updated" text
+	// (only available once a release is actually enriched, and only as fresh
+	// as its last enrichment) is what lets our default sort actually track
+	// F95zone's ordering in near-real-time rather than lagging behind by
+	// however long since the release was last re-scraped.
+	Ts int64 `json:"ts"`
 }
 
 type listDataResp struct {
@@ -975,6 +992,9 @@ func (a *App) fetchListingDataPage(ctx context.Context, cfg Config, page int) ([
 		}
 		r := Release{Link: fmt.Sprintf("%s/threads/%d/", f95BaseURL, it.ThreadID), Title: it.Title, ImageURLs: []string{}}
 		r.Labels, r.Engine, r.Version = parseTitleBrackets(r.Title)
+		if it.Ts > 0 {
+			r.ThreadUpdatedISO = time.Unix(it.Ts, 0).UTC().Format("2006-01-02T15:04:05-07:00")
+		}
 		out = append(out, r)
 	}
 	return out, d.Msg.Pagination.Total, nil
