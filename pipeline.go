@@ -196,7 +196,9 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		if fetcher != nil {
 			return nil
 		}
-		if cfg.FetchMode == "browser" {
+		if cfg.ByparrURL != "" {
+			fetcher = newByparrFetcher(cfg)
+		} else if cfg.FetchMode == "browser" {
 			a.log.Info("Launching headless Chromium...")
 			f, err := newBrowserFetcher(ctx, cfg)
 			if err != nil {
@@ -496,7 +498,9 @@ func (a *App) ReenrichOne(link string) error {
 		status := "IDLE"
 		defer func() { a.end(status) }()
 		var f Fetcher
-		if cfg.FetchMode == "browser" {
+		if cfg.ByparrURL != "" {
+			f = newByparrFetcher(cfg)
+		} else if cfg.FetchMode == "browser" {
 			bf, err := newBrowserFetcher(ctx, cfg)
 			if err != nil {
 				a.log.Error("%v", err)
@@ -817,7 +821,10 @@ func (a *App) runBackfill(ctx context.Context, pages, startPage int, ignoreEarly
 	a.setProgress(func(p *Progress) { p.Status = "ENRICHING"; p.Total = len(discovered); p.Current = 0 })
 
 	var fetcher Fetcher
-	if cfg.FetchMode == "browser" {
+	if cfg.ByparrURL != "" {
+		fetcher = newByparrFetcher(cfg)
+		defer fetcher.Close()
+	} else if cfg.FetchMode == "browser" {
 		bf, err := newBrowserFetcher(ctx, cfg)
 		if err != nil {
 			a.log.Error("Backfill: could not start Chromium for enrichment: %v", err)

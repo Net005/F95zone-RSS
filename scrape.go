@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -313,6 +314,165 @@ func (b *browserFetcher) Page(ctx context.Context, u string) (string, error) {
 func (b *browserFetcher) Close() {
 	b.cancel()
 	b.allocCancel()
+}
+
+// ──────────────────────────────────────────────────────────────
+//  Byparr fetcher: routes every request through a Byparr /
+//  FlareSolverr-compatible instance instead of a direct HTTP call or a
+//  locally-launched headless Chromium. Byparr runs its own patched
+//  browser to solve whatever Cloudflare/bot-challenge sits in front of
+//  the request and hands back the solved page plus cookies, which is
+//  useful precisely when a plain request gets blocked, or a vanilla
+//  chromedp browser gets fingerprinted and stalls (as opposed to being
+//  outright rejected) - the "context deadline exceeded" hang some
+//  bot-detection produces for automated-looking browsers.
+// ──────────────────────────────────────────────────────────────
+
+type byparrFetcher struct {
+	client    *http.Client
+	baseURL   string
+	timeoutS  int
+	ua        string
+	sessionID string
+}
+
+type byparrRequest struct {
+	Cmd        string `json:"cmd"`
+	URL        string `json:"url"`
+	MaxTimeout int    `json:"maxTimeout"`
+	Session    string `json:"session,omitempty"`
+	Cookies    []struct {
+		Name   string `json:"name"`
+		Value  string `json:"value"`
+		Domain string `json:"domain"`
+	} `json:"cookies,omitempty"`
+}
+
+type byparrSolution struct {
+	URL      string `json:"url"`
+	Status   int    `json:"status"`
+	Response string `json:"response"`
+	Cookies  []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"cookies"`
+}
+
+type byparrResponse struct {
+	Status   string         `json:"status"`
+	Message  string         `json:"message"`
+	Solution byparrSolution `json:"solution"`
+}
+
+func newByparrFetcher(cfg Config) *byparrFetcher {
+	return &byparrFetcher{
+		client:   &http.Client{Timeout: time.Duration(cfg.ByparrTimeoutS+15) * time.Second},
+		baseURL:  cfg.ByparrURL,
+		timeoutS: cfg.ByparrTimeoutS,
+		ua:       cfg.UserAgent,
+	}
+}
+
+// solve sends a single "request.get" through Byparr and returns the solved
+// page body plus the HTTP status Byparr reports F95zone responded with.
+func (f *byparrFetcher) solve(ctx context.Context, u string, cookie string) (string, int, error) {
+	reqBody := byparrRequest{Cmd: "request.get", URL: u, MaxTimeout: f.timeoutS * 1000, Session: f.sessionID}
+	if cookie != "" {
+		for _, part := range strings.Split(cookie, ";") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			kv := strings.SplitN(part, "=", 2)
+			if len(kv) != 2 || strings.TrimSpace(kv[0]) == "" {
+				continue
+			}
+			reqBody.Cookies = append(reqBody.Cookies, struct {
+				Name   string `json:"name"`
+				Value  string `json:"value"`
+				Domain string `json:"domain"`
+			}{Name: strings.TrimSpace(kv[0]), Value: strings.TrimSpace(kv[1]), Domain: ".f95zone.to"})
+		}
+	}
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", 0, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", f.baseURL+"/v1", bytes.NewReader(b))
+	if err != nil {
+		return "", 0, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := f.client.Do(httpReq)
+	if err != nil {
+		return "", 0, fmt.Errorf("byparr request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if err != nil {
+		return "", 0, err
+	}
+	if resp.StatusCode != 200 {
+		return "", 0, fmt.Errorf("byparr HTTP %d: %s", resp.StatusCode, trunc(string(body), 300))
+	}
+	var br byparrResponse
+	if err := json.Unmarshal(body, &br); err != nil {
+		return "", 0, fmt.Errorf("could not parse byparr response: %w", err)
+	}
+	if br.Status != "ok" {
+		return "", 0, fmt.Errorf("byparr could not solve %s: %s", u, br.Message)
+	}
+	return br.Solution.Response, br.Solution.Status, nil
+}
+
+// Page fetches a full HTML page (a thread page, the listing page, etc.)
+// through Byparr, satisfying the Fetcher interface so it's a drop-in
+// replacement for either httpFetcher or browserFetcher.
+func (f *byparrFetcher) Page(ctx context.Context, u string) (string, error) {
+	body, status, err := f.solve(ctx, u, "")
+	if err != nil {
+		return "", err
+	}
+	if status != 0 && status >= 400 {
+		return "", fmt.Errorf("byparr: HTTP %d fetching %s", status, u)
+	}
+	return body, nil
+}
+
+func (f *byparrFetcher) Close() {}
+
+// extractByparrJSON pulls raw JSON out of a Byparr solution's response
+// field for a request that hit F95zone's JSON listing API rather than an
+// HTML page. Byparr's underlying browser wraps a non-HTML response body
+// in a plain document (typically "<html><head></head><body><pre>...json
+// here...</pre></body></html>"), so a solved JSON endpoint isn't valid
+// JSON as-is and needs that wrapper stripped first.
+func extractByparrJSON(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
+		return raw
+	}
+	if m := byparrPreRe.FindStringSubmatch(raw); len(m) == 2 {
+		return html.UnescapeString(m[1])
+	}
+	return raw
+}
+
+var byparrPreRe = regexp.MustCompile(`(?is)<pre[^>]*>(.*?)</pre>`)
+
+// newFetcher centralizes fetch-mode selection: a configured Byparr instance
+// takes over every request unconditionally, overriding fetch_mode entirely,
+// since a Byparr instance solves Cloudflare-style challenges regardless of
+// whether the caller would otherwise have used a plain HTTP request or a
+// local headless-Chromium browser.
+func newFetcher(ctx context.Context, cfg Config) (Fetcher, error) {
+	if cfg.ByparrURL != "" {
+		return newByparrFetcher(cfg), nil
+	}
+	if cfg.FetchMode == "browser" {
+		return newBrowserFetcher(ctx, cfg)
+	}
+	return newHTTPFetcher(cfg), nil
 }
 
 func firstNonEmpty(v ...string) string {
@@ -957,26 +1117,39 @@ type listDataResp struct {
 // reports, so callers don't need to guess when to stop.
 func (a *App) fetchListingDataPage(ctx context.Context, cfg Config, page int) ([]Release, int, error) {
 	u := fmt.Sprintf(listDataURLTemplate, page)
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	req.Header.Set("User-Agent", cfg.UserAgent)
-	req.Header.Set("Accept", "application/json")
-	if cfg.SiteCookie != "" {
-		req.Header.Set("Cookie", cfg.SiteCookie)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, 0, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, 0, err
+	var b []byte
+	if cfg.ByparrURL != "" {
+		bf := newByparrFetcher(cfg)
+		raw, status, err := bf.solve(ctx, u, cfg.SiteCookie)
+		if err != nil {
+			return nil, 0, err
+		}
+		if status != 0 && status >= 400 {
+			return nil, 0, fmt.Errorf("byparr: HTTP %d fetching listing page", status)
+		}
+		b = []byte(extractByparrJSON(raw))
+	} else {
+		req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		req.Header.Set("User-Agent", cfg.UserAgent)
+		req.Header.Set("Accept", "application/json")
+		if cfg.SiteCookie != "" {
+			req.Header.Set("Cookie", cfg.SiteCookie)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return nil, 0, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		b, err = io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		if err != nil {
+			return nil, 0, err
+		}
 	}
 	var d listDataResp
 	if err := json.Unmarshal(b, &d); err != nil {
@@ -1041,7 +1214,12 @@ func (a *App) CheckF95Login(ctx context.Context) (LoginCheck, error) {
 	}
 	res.CheckedLink, res.CheckedTitle = link, title
 
-	f := newHTTPFetcher(cfg)
+	var f Fetcher
+	if cfg.ByparrURL != "" {
+		f = newByparrFetcher(cfg)
+	} else {
+		f = newHTTPFetcher(cfg)
+	}
 	defer f.Close()
 	rawHTML, err := f.Page(ctx, link)
 	if err != nil {

@@ -237,6 +237,13 @@
         <div class="btnrow"><button class="btn" type="button" id="btnCheckLogin">Check F95zone login</button></div>
         <div id="loginCheckResult"></div>
       </fieldset>
+      <fieldset><legend>Byparr <small>(anti-bot bypass proxy)</small></legend>
+        <p class="muted small">When set, every request this app makes to F95zone - listing, thread enrichment, and images - is routed through Byparr instead, and Fetch mode above is ignored. Use this if enrichment is timing out or getting Cloudflare-blocked even in browser mode.</p>
+        <div class="grid g3">
+          <label class="lbl">Byparr URL <small>(e.g. http://byparr:8191)</small><input class="in" name="byparr_url" placeholder="leave blank to disable"></label>
+          <label class="lbl">Solve timeout (s)<input class="in" type="number" min="5" max="300" name="byparr_timeout_s" style="max-width:140px"></label>
+        </div>
+      </fieldset>
       <fieldset><legend>Releases grid</legend>
         <label class="chk"><input type="checkbox" name="hover_slideshow_enabled"> Hover slideshow <small>(cycle a release tile's screenshots on mouse hover)</small></label>
         <div class="grid g3">

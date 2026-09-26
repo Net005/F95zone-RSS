@@ -44,7 +44,7 @@ func normalizeSiteCookie(raw string) string {
 }
 
 const (
-	appVersion       = "6.5.14"
+	appVersion       = "6.6.0"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
@@ -111,6 +111,21 @@ type Config struct {
 	// enrichment and backfill see the same content a logged-in member would.
 	SiteCookie string `json:"site_cookie"`
 
+	// ByparrURL: base URL of a Byparr (or FlareSolverr-compatible) instance
+	// (e.g. "http://byparr:8191"). When set, EVERY outbound request this app
+	// makes to F95zone - the listing API, thread page enrichment, and image
+	// downloads alike - is routed through it instead of a direct HTTP request
+	// or headless Chromium (FetchMode is ignored while this is set): Byparr
+	// runs its own patched/stealth browser to solve whatever Cloudflare or
+	// other bot-challenge is in front of the site, which a plain request or
+	// vanilla chromedp can otherwise get stuck behind indefinitely. Empty
+	// (the default) disables it entirely and nothing changes from before.
+	ByparrURL string `json:"byparr_url"`
+	// ByparrTimeoutS: how long Byparr itself is allowed to spend solving a
+	// single request (its own "maxTimeout", in seconds - Byparr's API takes
+	// milliseconds, this is converted when calling it).
+	ByparrTimeoutS int `json:"byparr_timeout_s"`
+
 	BackfillURLTemplate string `json:"backfill_url_template"`
 
 	// NotifyNew is kept only so older settings.json/database values still decode;
@@ -154,6 +169,7 @@ func defaultConfig() Config {
 		SchedulerEnabled:           true,
 		ReuseUnchanged:             true,
 		BackfillURLTemplate:        defaultBackfillTemplate,
+		ByparrTimeoutS:             60,
 		NotifyNew:                  true,
 		NotifyUpdate:               true,
 		HoverSlideshowEnabled:      true,
@@ -193,6 +209,15 @@ func (c *Config) Validate() error {
 	}
 	if c.FetchMode != "http" && c.FetchMode != "browser" {
 		return errors.New(`fetch_mode must be "http" or "browser"`)
+	}
+	c.ByparrURL = strings.TrimRight(strings.TrimSpace(c.ByparrURL), "/")
+	if c.ByparrURL != "" {
+		if u, err := url.Parse(c.ByparrURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return errors.New("byparr_url must be a valid http(s) URL")
+		}
+	}
+	if c.ByparrTimeoutS < 5 || c.ByparrTimeoutS > 300 {
+		return errors.New("byparr_timeout_s must be between 5 and 300")
 	}
 	if strings.TrimSpace(c.UserAgent) == "" {
 		c.UserAgent = defaultUA
