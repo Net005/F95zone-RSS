@@ -68,11 +68,15 @@
         <div class="hr"></div>
         <label class="lbl">Backfill older releases <small>(harvests the listing pages, then enriches anything new)</small></label>
         <div class="copyrow">
+          <span class="muted small">from page</span>
+          <input class="in" id="bfStartPage" type="number" min="1" max="2000" value="1" style="max-width:90px">
+          <span class="muted small">for</span>
           <input class="in" id="bfPages" type="number" min="1" max="2000" value="5" style="max-width:90px">
           <span class="muted small">page(s)</span>
           <span class="spacer"></span>
           <button class="btn" id="btnBackfill">Start backfill</button>
         </div>
+        <div class="muted small" style="margin-top:4px">Resuming an interrupted backfill? Set "from page" to just past where the log last got to - a restart doesn't remember where it left off, and starting over at page 1 just re-walks pages it already knows.</div>
       </div>
     </div>
   </div>

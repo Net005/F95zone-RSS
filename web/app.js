@@ -125,8 +125,10 @@ $('#btnRebuild').onclick = rebuild; $('#btnRebuild2').onclick = rebuild;
 $('#btnPurge').onclick = () => act(() => api('/api/images/purge', { method: 'POST' }), r => `Removed ${r.removed} images (${fmtBytes(r.bytes)})`);
 $('#btnClearCache').onclick = () => { if (confirm('Clear the entire release history? The next run will re-scrape everything from the current source feed (older backfilled releases will be gone).')) act(() => api('/api/cache/clear', { method: 'POST' }), 'Release history cleared'); };
 $('#btnBackfill').onclick = () => {
-  const pages = Math.max(1, Math.min(200, Number($('#bfPages').value) || 5));
-  act(() => api('/api/backfill', { method: 'POST', body: { pages } }), r => `Backfill started (${r.pages} page(s)) - watch the live log`);
+  const pages = Math.max(1, Math.min(2000, Number($('#bfPages').value) || 5));
+  const startPage = Math.max(1, Math.min(2000, Number($('#bfStartPage').value) || 1));
+  act(() => api('/api/backfill', { method: 'POST', body: { pages, start_page: startPage } }),
+    r => `Backfill started (page ${r.start_page} for ${r.pages} page(s)) - watch the live log`);
 };
 
 // ── live log ──

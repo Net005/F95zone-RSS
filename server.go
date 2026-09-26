@@ -436,16 +436,22 @@ func (s *Server) purge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) backfill(w http.ResponseWriter, r *http.Request) {
-	var b struct{ Pages int }
+	var b struct {
+		Pages     int `json:"pages"`
+		StartPage int `json:"start_page"`
+	}
 	readBody(r, &b)
 	if b.Pages < 1 {
 		b.Pages = 5
 	}
-	if err := s.app.StartBackfill(b.Pages); err != nil {
+	if b.StartPage < 1 {
+		b.StartPage = 1
+	}
+	if err := s.app.StartBackfill(b.Pages, b.StartPage); err != nil {
 		writeErr(w, 409, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"ok": true, "pages": b.Pages})
+	writeJSON(w, 200, map[string]any{"ok": true, "pages": b.Pages, "start_page": b.StartPage})
 }
 
 // ── notifications ──

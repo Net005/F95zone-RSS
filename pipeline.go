@@ -684,7 +684,7 @@ func (a *App) fetchListingItems(ctx context.Context, cfg Config, pages int) ([]R
 	return out, nil
 }
 
-func (a *App) StartBackfill(pages int) error {
+func (a *App) StartBackfill(pages, startPage int) error {
 	if pages < 1 {
 		pages = 1
 	}
@@ -694,15 +694,29 @@ func (a *App) StartBackfill(pages int) error {
 	if pages > 2000 {
 		pages = 2000
 	}
+	if startPage < 1 {
+		startPage = 1
+	}
 	ctx, err := a.begin("backfill")
 	if err != nil {
 		return err
 	}
-	go a.runBackfill(ctx, pages)
+	go a.runBackfill(ctx, pages, startPage)
 	return nil
 }
 
-func (a *App) runBackfill(ctx context.Context, pages int) {
+// runBackfill walks the listing from startPage through startPage+pages-1.
+// There's no persisted "resume point" across restarts - if the app is
+// rebuilt/restarted mid-backfill, the in-progress run's goroutine and its
+// page counter are simply gone (already-enriched releases stay in the
+// database, since each one is written as soon as it's enriched, not batched
+// at the end - nothing already done is lost or re-enriched). To continue a
+// backfill that got this far, start a new one with startPage set just past
+// wherever the log said it had reached, rather than restarting at page 1 -
+// otherwise every already-known page in between counts toward the
+// consecutive-empty-page early stop below and can end the run before it
+// ever reaches fresh territory again.
+func (a *App) runBackfill(ctx context.Context, pages, startPage int) {
 	cfg := a.cfg.Get()
 	rec := RunRecord{Trigger: "backfill", Started: time.Now()}
 	finish := func(status, errMsg string) {
@@ -723,8 +737,13 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 		}
 	}()
 
+	endPage := startPage + pages - 1
 	a.log.Info("============================================================")
-	a.log.Info("Starting backfill: up to %d listing page(s)", pages)
+	if startPage > 1 {
+		a.log.Info("Starting backfill: listing page %d through %d", startPage, endPage)
+	} else {
+		a.log.Info("Starting backfill: up to %d listing page(s)", pages)
+	}
 
 	existing := a.store.db.AllLinks()
 	seen := map[string]bool{}
@@ -732,12 +751,12 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 	consecutiveEmpty := 0
 	failures := 0
 
-	for page := 1; page <= pages; page++ {
+	for page := startPage; page <= endPage; page++ {
 		if ctx.Err() != nil {
 			break
 		}
-		a.setProgress(func(p *Progress) { p.Status = "FETCHING"; p.Item = fmt.Sprintf("listing page %d/%d", page, pages) })
-		a.log.Info("Backfill: loading listing page %d/%d", page, pages)
+		a.setProgress(func(p *Progress) { p.Status = "FETCHING"; p.Item = fmt.Sprintf("listing page %d/%d", page, endPage) })
+		a.log.Info("Backfill: loading listing page %d/%d", page, endPage)
 		items, totalPages, err := a.fetchListingDataPage(ctx, cfg, page)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -780,7 +799,7 @@ func (a *App) runBackfill(ctx context.Context, pages int) {
 		if totalPages > 0 && page >= totalPages {
 			break
 		}
-		if page < pages {
+		if page < endPage {
 			select {
 			case <-ctx.Done():
 			case <-time.After(time.Duration(cfg.RateLimitMS) * time.Millisecond):
