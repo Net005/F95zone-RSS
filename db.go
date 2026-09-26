@@ -38,6 +38,7 @@ func OpenDB(path string) (*DB, error) {
 			image_urls_json TEXT NOT NULL DEFAULT '[]',
 			header_image TEXT NOT NULL DEFAULT '',
 			thread_updated TEXT NOT NULL DEFAULT '',
+			thread_updated_iso TEXT NOT NULL DEFAULT '',
 			release_date TEXT NOT NULL DEFAULT '',
 			developer TEXT NOT NULL DEFAULT '',
 			censored TEXT NOT NULL DEFAULT '',
@@ -53,6 +54,7 @@ func OpenDB(path string) (*DB, error) {
 			last_seen TEXT NOT NULL,
 			discovered_via TEXT NOT NULL DEFAULT 'feed')`,
 		`CREATE INDEX IF NOT EXISTS idx_releases_pub ON releases(pub_date_iso DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_releases_thread_updated ON releases(thread_updated_iso DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_releases_engine ON releases(engine)`,
 		`CREATE TABLE IF NOT EXISTS release_tags(
 			link TEXT NOT NULL REFERENCES releases(link) ON DELETE CASCADE,
@@ -87,6 +89,9 @@ func OpenDB(path string) (*DB, error) {
 		return nil, err
 	}
 	if err := db.migrateChangelogDownloadsColumns(); err != nil {
+		return nil, err
+	}
+	if err := db.migrateThreadUpdatedISOColumn(); err != nil {
 		return nil, err
 	}
 	return db, nil
@@ -254,4 +259,44 @@ func (d *DB) DeleteSession(tokenHash string) {
 
 func (d *DB) DeleteOtherSessions(uid int64, keep string) {
 	d.sql.Exec(`DELETE FROM sessions WHERE user_id=? AND token_hash<>?`, uid, keep)
+}
+
+// migrateThreadUpdatedISOColumn adds releases.thread_updated_iso to databases
+// created before the default sort was changed to match F95zone's own
+// latest-alpha listing (most recent thread update, not our first-seen /
+// publish date). For rows that already have a plain "Thread updated" date in
+// the existing well-known "2006-01-02" shape, backfill the ISO column
+// directly in SQL so the corrected sort applies immediately without waiting
+// for every release to be re-scraped.
+func (d *DB) migrateThreadUpdatedISOColumn() error {
+	rows, err := d.sql.Query(`PRAGMA table_info(releases)`)
+	if err != nil {
+		return err
+	}
+	has := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "thread_updated_iso" {
+			has = true
+		}
+	}
+	rows.Close()
+	if !has {
+		if _, err := d.sql.Exec(`ALTER TABLE releases ADD COLUMN thread_updated_iso TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	if _, err := d.sql.Exec(`CREATE INDEX IF NOT EXISTS idx_releases_thread_updated ON releases(thread_updated_iso DESC)`); err != nil {
+		return err
+	}
+	_, err = d.sql.Exec(`UPDATE releases SET thread_updated_iso = thread_updated || 'T00:00:00+00:00'
+		WHERE (thread_updated_iso IS NULL OR thread_updated_iso = '')
+		AND thread_updated GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'`)
+	return err
 }

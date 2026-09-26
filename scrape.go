@@ -38,6 +38,21 @@ type srcFeed struct {
 	} `xml:"channel"`
 }
 
+// parseFieldDate turns a thread metadata field's date text (e.g. the
+// "Thread updated" or "Release date" field, always in the plain YYYY-MM-DD
+// shape XenForo renders those in) into the same sortable ISO format
+// PubDateISO uses, or "" if it doesn't look like a date at all.
+func parseFieldDate(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t.UTC().Format("2006-01-02T15:04:05-07:00")
+	}
+	return ""
+}
+
 func parseRSSDate(s string) string {
 	t, err := mail.ParseDate(s)
 	if err != nil {
@@ -767,6 +782,7 @@ func (a *App) enrichRelease(ctx context.Context, f Fetcher, r *Release, cfg Conf
 
 	fields := extractFields(inner)
 	r.ThreadUpdated = fields["thread updated"]
+	r.ThreadUpdatedISO = parseFieldDate(r.ThreadUpdated)
 	r.ReleaseDate = fields["release date"]
 	// A release discovered straight off the listing pages (fetchListingItems /
 	// backfill) has no PubDate - that used to come from the F95zone source RSS

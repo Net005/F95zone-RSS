@@ -44,7 +44,7 @@ func normalizeSiteCookie(raw string) string {
 }
 
 const (
-	appVersion       = "6.5.5"
+	appVersion       = "6.5.6"
 	defaultPort      = 6069
 	f95BaseURL       = "https://f95zone.to"
 	defaultRSSSource = f95BaseURL + "/sam/latest_alpha/latest_data.php?cmd=rss&cat=games&rows=90"
@@ -65,7 +65,10 @@ const (
 	// v5 (6.5.1): Overview now keeps its paragraph breaks (stripHTMLParagraphs) instead of being
 	// flattened into one run-on line - bumped so existing rows get reformatted, not just new ones.
 	// v6 (6.5.2): Changelog and Downloads/Links are now extracted as their own fields.
-	parserVersion = 6
+	// v7 (6.5.6): thread_updated_iso is now populated on every enrichment so the default
+	// sort can reflect the thread's real last-update time (matching F95zone's own
+	// latest-alpha listing) instead of freezing on the release's original publish date.
+	parserVersion = 7
 )
 
 // Config mirrors the original settings.json keys and adds a few new ones.

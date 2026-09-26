@@ -27,6 +27,7 @@ type Release struct {
 	ImageURLs         []string       `json:"image_urls"`
 	HeaderImage       string         `json:"header_image"`
 	ThreadUpdated     string         `json:"thread_updated,omitempty"`
+	ThreadUpdatedISO  string         `json:"thread_updated_iso,omitempty"`
 	ReleaseDate       string         `json:"release_date,omitempty"`
 	Developer         string         `json:"developer,omitempty"`
 	Censored          string         `json:"censored,omitempty"`
@@ -93,7 +94,7 @@ func scanRelease(row interface {
 	var watched int
 	var downloads string
 	err := row.Scan(&r.Link, &r.Title, &r.PubDateRaw, &r.PubDateISO, &r.SourceDescription, &r.ExtraDescription,
-		&r.Overview, &labels, &r.Engine, &r.Version, &imgs, &r.HeaderImage, &r.ThreadUpdated, &r.ReleaseDate, &r.Developer,
+		&r.Overview, &labels, &r.Engine, &r.Version, &imgs, &r.HeaderImage, &r.ThreadUpdated, &r.ThreadUpdatedISO, &r.ReleaseDate, &r.Developer,
 		&r.Censored, &r.OS, &r.Language, &r.Store, &r.Changelog, &downloads, &r.EnrichedAt, &r.EnrichError, &r.ParserVer,
 		&r.FirstSeen, &r.LastSeen, &r.DiscoveredVia, &watched)
 	if err != nil {
@@ -108,7 +109,7 @@ func scanRelease(row interface {
 }
 
 const releaseCols = `link, title, pub_date_raw, pub_date_iso, source_description, extra_description, overview,
-	labels_json, engine, version, image_urls_json, header_image, thread_updated, release_date, developer,
+	labels_json, engine, version, image_urls_json, header_image, thread_updated, thread_updated_iso, release_date, developer,
 	censored, os, language, store, changelog, downloads_json, enriched_at, enrich_error, parser_ver, first_seen, last_seen, discovered_via, watched`
 
 func (d *DB) tagsFor(link string) []string {
@@ -159,20 +160,20 @@ func (d *DB) UpsertRelease(r Release, discoveredVia string) error {
 	// watched is intentionally left out of the UPDATE SET clause below: a
 	// human's "monitor this release" toggle must survive every re-scrape.
 	// The bound value here only ever applies to a genuinely new row.
-	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+	_, err = tx.Exec(`INSERT INTO releases(`+releaseCols+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(link) DO UPDATE SET
 			title=excluded.title, pub_date_raw=excluded.pub_date_raw, pub_date_iso=excluded.pub_date_iso,
 			source_description=excluded.source_description, extra_description=excluded.extra_description,
 			overview=excluded.overview,
 			labels_json=excluded.labels_json, engine=excluded.engine, version=excluded.version,
 			image_urls_json=excluded.image_urls_json, header_image=excluded.header_image,
-			thread_updated=excluded.thread_updated, release_date=excluded.release_date, developer=excluded.developer,
+			thread_updated=excluded.thread_updated, thread_updated_iso=excluded.thread_updated_iso, release_date=excluded.release_date, developer=excluded.developer,
 			censored=excluded.censored, os=excluded.os, language=excluded.language, store=excluded.store,
 			changelog=excluded.changelog, downloads_json=excluded.downloads_json,
 			enriched_at=excluded.enriched_at, enrich_error=excluded.enrich_error, parser_ver=excluded.parser_ver,
 			last_seen=excluded.last_seen`,
 		r.Link, r.Title, r.PubDateRaw, r.PubDateISO, r.SourceDescription, r.ExtraDescription, r.Overview,
-		jsonArr(r.Labels), r.Engine, r.Version, jsonArr(r.ImageURLs), r.HeaderImage, r.ThreadUpdated, r.ReleaseDate,
+		jsonArr(r.Labels), r.Engine, r.Version, jsonArr(r.ImageURLs), r.HeaderImage, r.ThreadUpdated, r.ThreadUpdatedISO, r.ReleaseDate,
 		r.Developer, r.Censored, r.OS, r.Language, r.Store, r.Changelog, jsonDownloads(r.Downloads), r.EnrichedAt, r.EnrichError, r.ParserVer,
 		firstSeen, now, discoveredVia, boolToInt(r.Watched))
 	if err != nil {
@@ -267,10 +268,14 @@ func (d *DB) QueryReleases(f ReleaseFilter) (ReleasePage, error) {
 			args = append(args, t)
 		}
 	}
-	order := "pub_date_iso DESC, last_seen DESC"
+	// "newest" (the default) mirrors F95zone's own latest-alpha listing, which
+	// is sorted by the thread's most recent post/update - not by when we first
+	// saw it, and not by the game's original publish date. thread_updated_iso
+	// falls back to pub_date_iso for rows scraped before that field existed.
+	order := "COALESCE(NULLIF(thread_updated_iso,''), pub_date_iso) DESC, last_seen DESC"
 	switch f.Sort {
 	case "oldest":
-		order = "pub_date_iso ASC, last_seen ASC"
+		order = "COALESCE(NULLIF(thread_updated_iso,''), pub_date_iso) ASC, last_seen ASC"
 	case "title":
 		order = "title COLLATE NOCASE ASC"
 	case "recent":
