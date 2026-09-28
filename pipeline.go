@@ -242,8 +242,13 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		// moments ago from the current listing page) is the authoritative
 		// signal for whether anything actually changed; title match is only
 		// the fallback for the rare case neither side has an ISO timestamp.
+		// Require BOTH signals to agree before calling it unchanged: ts alone
+		// misses a title-only edit (rare, but a moderator retitling/relocating
+		// a thread doesn't necessarily bump F95zone's own "latest updates"
+		// timestamp), and title alone misses everything described above. Any
+		// signal that looks like a change is enough to force a re-scrape.
 		sameUpdate := existing.Title == it.Title
-		if it.ThreadUpdatedISO != "" && existing.ThreadUpdatedISO != "" {
+		if sameUpdate && it.ThreadUpdatedISO != "" && existing.ThreadUpdatedISO != "" {
 			sameUpdate = it.ThreadUpdatedISO == existing.ThreadUpdatedISO
 		}
 		if cfg.ReuseUnchanged && !full && hadExisting && existing.ParserVer == parserVersion &&
