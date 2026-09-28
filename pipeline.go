@@ -233,8 +233,21 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 		a.setProgress(func(p *Progress) { p.Current = i + 1; p.Item = trunc(it.Title, 60) })
 
 		reused := false
+		// "Unchanged" used to mean "title identical to what we last saw," but
+		// plenty of threads never touch their title across updates (version
+		// lives only in the OP's own "Version:" field or the thread's bump
+		// time) - those releases would then be judged unchanged forever and
+		// silently never re-scraped again, no matter how many real updates
+		// the dev shipped. F95zone's own listing "ts" (ThreadUpdatedISO, set
+		// moments ago from the current listing page) is the authoritative
+		// signal for whether anything actually changed; title match is only
+		// the fallback for the rare case neither side has an ISO timestamp.
+		sameUpdate := existing.Title == it.Title
+		if it.ThreadUpdatedISO != "" && existing.ThreadUpdatedISO != "" {
+			sameUpdate = it.ThreadUpdatedISO == existing.ThreadUpdatedISO
+		}
 		if cfg.ReuseUnchanged && !full && hadExisting && existing.ParserVer == parserVersion &&
-			existing.Title == it.Title && existing.ExtraDescription != "" && existing.EnrichError == "" &&
+			sameUpdate && existing.ExtraDescription != "" && existing.EnrichError == "" &&
 			existing.Overview != "" && len(existing.Tags) > 0 {
 			it.ExtraDescription, it.ImageURLs, it.HeaderImage, it.EnrichedAt = existing.ExtraDescription, existing.ImageURLs, existing.HeaderImage, existing.EnrichedAt
 			it.Tags, it.ThreadUpdated, it.ReleaseDate = existing.Tags, existing.ThreadUpdated, existing.ReleaseDate
@@ -248,6 +261,8 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 			a.log.Info("  Unchanged since last run, reusing enrichment")
 		} else if hadExisting && (existing.Overview == "" || len(existing.Tags) == 0) && existing.EnrichError == "" {
 			a.log.Info("  Re-scraping: missing tags or overview from a previous run")
+		} else if hadExisting && !sameUpdate && existing.Overview != "" {
+			a.log.Info("  Re-scraping: thread updated since last enrichment")
 		}
 		if !reused {
 			if err := needFetcher(); err != nil {
