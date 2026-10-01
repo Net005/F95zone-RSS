@@ -164,7 +164,14 @@ func (a *App) runPipeline(ctx context.Context, trigger string, force, full bool)
 				finish("error", err.Error())
 				return
 			}
-			a.saveFeedWindow(fw.Links)
+			// Do NOT re-save the feed window here: that used to re-stamp its
+			// "At" timestamp to now() on every cache hit, which perpetually
+			// renewed the TTL window and meant a real re-scrape (and so any
+			// newly discovered release) could never happen again once the
+			// very first cache hit occurred - every run after that saw a
+			// "fresh" cache forever and just kept rebuilding the same stale
+			// feed. Leaving the original timestamp alone lets the TTL
+			// actually expire on schedule.
 			a.setProgress(func(p *Progress) { p.Percent = 100 })
 			a.log.Info("RSS rebuilt from cache (%d items)", len(rel))
 			rec.Items = len(rel)
